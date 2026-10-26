@@ -757,8 +757,8 @@
                 <input type="text" id="editar-pan" readonly class="w-full bg-slate-950/60 border border-slate-800 rounded-lg p-2.5 text-slate-400 font-mono font-bold cursor-not-allowed">
               </div>
               <div>
-                <label class="block text-slate-300 font-bold mb-1">PIN del Cajero (4 dígitos)</label>
-                <input type="text" id="editar-pin" maxlength="4" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-amber-300 font-mono font-bold focus:border-indigo-500 focus:outline-none text-center">
+                <label class="block text-slate-300 font-bold mb-1">Nuevo PIN (vacío = sin cambios)</label>
+                <input type="password" id="editar-pin" maxlength="4" inputmode="numeric" autocomplete="new-password" placeholder="••••" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-amber-300 font-mono font-bold focus:border-indigo-500 focus:outline-none text-center">
               </div>
             </div>
 
@@ -903,7 +903,7 @@
             <div class="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs space-y-1.5">
               <div class="flex justify-between items-center">
                 <span class="text-slate-400 font-semibold">PIN Secreto del Cajero:</span>
-                <span id="card-modal-pin-badge" class="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 font-mono font-black border border-amber-500/40 text-xs">1234</span>
+                <span id="card-modal-pin-badge" class="px-2.5 py-1 rounded bg-amber-500/20 text-amber-300 font-mono font-black border border-amber-500/40 text-xs">••••</span>
               </div>
               <div class="flex justify-between items-center">
                 <span class="text-slate-400 font-semibold">Saldo Disponible:</span>
@@ -981,6 +981,16 @@
             <div>
               <label class="block font-bold text-slate-300 mb-1">Terminal ID (DE 41)</label>
               <input type="text" id="sim-terminal" value="ATMNX001" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-white font-mono">
+            </div>
+
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">PIN (DE 52, PIN block ISO 9564)</label>
+              <input type="password" id="sim-pin" maxlength="4" inputmode="numeric" autocomplete="off" placeholder="Opcional: 4 dígitos" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-white font-mono">
+            </div>
+
+            <div>
+              <label class="block font-bold text-slate-300 mb-1">RRN (DE 37)</label>
+              <input type="text" id="sim-rrn" maxlength="12" autocomplete="off" placeholder="Vacío = nuevo; en 0420, RRN original" class="w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-white font-mono">
             </div>
           </div>
 
@@ -1075,17 +1085,22 @@
         </div>
 
         <p class="text-xs text-slate-300 leading-relaxed mb-4">
-          Ingrese la contraseña de seguridad para acceder a la gestión de cuentas, métricas del core e inspector de tramas.
+          Ingrese sus credenciales de administrador. Se validan en el servidor (Spring Security, HTTP Basic) y dan acceso a la gestión de cuentas, métricas del core e inspector de tramas.
         </p>
 
         <!-- Formulario de Contraseña -->
         <form onsubmit="verificarLoginAdmin(event)" class="space-y-4">
           <div>
+            <label for="input-admin-usuario" class="block text-[11px] font-bold text-slate-300 uppercase tracking-wider mb-1.5">
+              Usuario
+            </label>
+            <input type="text" id="input-admin-usuario" value="admin" autocomplete="username" spellcheck="false"
+              class="w-full bg-slate-950 border border-slate-700 rounded-xl px-3.5 py-2.5 text-sm text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 font-mono transition mb-3">
             <div class="flex justify-between items-center mb-1.5">
-              <label class="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
-                Contraseña de Seguridad
+              <label for="input-admin-password" class="block text-[11px] font-bold text-slate-300 uppercase tracking-wider">
+                Contraseña
               </label>
-              <span class="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/30">Clave: admin</span>
+              <span class="text-[10px] font-mono text-cyan-400 bg-cyan-950/60 px-2 py-0.5 rounded border border-cyan-500/30">HTTP Basic</span>
             </div>
             <div class="relative">
               <input type="password" id="input-admin-password" placeholder="••••••••" autocomplete="current-password"
@@ -1167,8 +1182,9 @@
       account: '1001-2002-3001',
       pan: '4532000000000001',
       titular: 'CARLOS PEREZ',
-      correctPin: '1234',
+      pinTarjeta: null,  // PIN tecleado; viaja cifrado como PIN block ISO 9564 (DE 52) y lo valida el Core
       enteredPin: '',
+      ultimaTx: null,    // último retiro aprobado {rrn, monto, procCode}: objetivo de la reversa 0420
       banco: null,
       currentScreen: 'WELCOME', // WELCOME, PIN_ENTRY, MAIN_MENU, WITHDRAWAL_MENU, CUSTOM_AMOUNT, PROCESSING, SUCCESS, ERROR, BALANCE_DISPLAY
       lastTxResult: null
@@ -1237,19 +1253,7 @@
 
         titleEl.innerText = titulo || 'NOTIFICACIÓN BANCARIA';
         
-        if (tipo === 'pin' || String(mensaje).includes('PIN secreto')) {
-          const pinVal = String(mensaje).replace(/.*:\s*/, '');
-          msgContainer.innerHTML = `
-            <p class="text-xs text-slate-300 mb-2">Credencial de seguridad verificada en el Core Bancario:</p>
-            <div class="p-3 bg-slate-950 rounded-xl border border-amber-500/40 flex items-center justify-between shadow-inner">
-              <span class="text-xs text-slate-400 uppercase font-bold tracking-wider">PIN de Seguridad:</span>
-              <span class="font-mono text-xl font-black text-amber-400 tracking-widest px-3 py-0.5 bg-amber-500/10 rounded-lg border border-amber-500/30">${pinVal}</span>
-            </div>
-            <p class="text-[10.5px] text-slate-400 mt-2">Puede usar este PIN en el teclado numérico de la pantalla o ingresarlo desde su teclado físico.</p>
-          `;
-        } else {
-          msgContainer.innerText = mensaje;
-        }
+        msgContainer.innerText = mensaje;
 
         modal.classList.remove('hidden');
         setTimeout(() => card.classList.replace('scale-95', 'scale-100'), 10);
@@ -1695,7 +1699,36 @@
 
     // ================= MODO ADMINISTRADOR PROTEGIDO POR CONTRASEÑA =================
     let ADMIN_SESION_ACTIVA = false;
-    const ADMIN_PASSWORD_HASH = "admin"; // Contraseña de acceso al Core y Admin: admin
+    // Cabecera Authorization (HTTP Basic) validada por el servidor; solo vive en memoria de la pestaña
+    let ADMIN_AUTH = null;
+
+    // Operaciones de administración: adjuntan las credenciales y cierran la sesión si el servidor las rechaza
+    async function fetchAdmin(url, opciones) {
+      const o = Object.assign({}, opciones || {});
+      o.headers = Object.assign({ 'Authorization': ADMIN_AUTH || '' }, o.headers || {});
+      const res = await fetch(url, o);
+      if (res.status === 401 || res.status === 403) {
+        cerrarSesionAdmin(true);
+        mostrarModalAlerta({
+          titulo: "SESIÓN DE ADMINISTRADOR NO VÁLIDA",
+          mensaje: `El servidor rechazó las credenciales (HTTP ${res.status}). Inicie sesión nuevamente.`,
+          tipo: "error"
+        });
+        const e = new Error('HTTP ' + res.status);
+        e.sesionInvalida = true;
+        throw e;
+      }
+      return res;
+    }
+
+    async function mensajeErrorServidor(res, porDefecto) {
+      try {
+        const cuerpo = await res.json();
+        return cuerpo.error || cuerpo.mensaje || porDefecto;
+      } catch (e) {
+        return porDefecto;
+      }
+    }
 
     function toggleModoAdmin() {
       if (ADMIN_SESION_ACTIVA) {
@@ -1747,41 +1780,62 @@
       }
     }
 
-    function verificarLoginAdmin(e) {
+    async function verificarLoginAdmin(e) {
       if (e) e.preventDefault();
+      const inputUsuario = document.getElementById('input-admin-usuario');
       const input = document.getElementById('input-admin-password');
       const err = document.getElementById('admin-login-error');
       const errText = document.getElementById('admin-login-error-text');
-      const pass = (input ? input.value : '').trim();
+      const usuario = (inputUsuario ? inputUsuario.value : '').trim();
+      const pass = input ? input.value : '';
 
-      if (pass === ADMIN_PASSWORD_HASH || pass === 'admin123') {
-        ADMIN_SESION_ACTIVA = true;
-        cerrarModalLoginAdmin();
-        
-        actualizarBotonAdminUI(true);
-
-        const adminBar = document.getElementById('admin-tabs-bar');
-        if (adminBar) adminBar.classList.remove('hidden');
-        switchTab('admin');
-        mostrarToast("Acceso de Administrador Autorizado", "success");
-      } else {
+      const mostrarError = (texto) => {
         if (err) err.classList.remove('hidden');
-        if (errText) errText.innerText = pass ? "Contraseña incorrecta. Acceso restringido." : "Por favor ingrese la contraseña.";
+        if (errText) errText.innerText = texto;
         if (input) {
           input.classList.add('border-rose-500', 'ring-2', 'ring-rose-500');
           input.select();
           input.focus();
         }
+      };
+      if (!usuario || !pass) {
+        mostrarError("Por favor ingrese usuario y contraseña.");
+        return;
+      }
+
+      const bytes = new TextEncoder().encode(usuario + ':' + pass);
+      const auth = 'Basic ' + btoa(String.fromCharCode(...bytes));
+      try {
+        const res = await fetch('/api/core/admin/sesion', { headers: { 'Authorization': auth } });
+        if (!res.ok) {
+          mostrarError(res.status === 401 ? "Usuario o contraseña incorrectos. Acceso restringido." : `El servidor respondió HTTP ${res.status}.`);
+          return;
+        }
+        const sesion = await res.json();
+        ADMIN_AUTH = auth;
+        ADMIN_SESION_ACTIVA = true;
+        if (input) input.value = '';
+        cerrarModalLoginAdmin();
+
+        actualizarBotonAdminUI(true);
+
+        const adminBar = document.getElementById('admin-tabs-bar');
+        if (adminBar) adminBar.classList.remove('hidden');
+        switchTab('admin');
+        mostrarToast(`Acceso autorizado: ${sesion.usuario} (${sesion.rol})`, "success");
+      } catch (ex) {
+        mostrarError("No se pudo contactar al servidor: " + ex);
       }
     }
 
-    function cerrarSesionAdmin() {
+    function cerrarSesionAdmin(silencioso) {
       ADMIN_SESION_ACTIVA = false;
+      ADMIN_AUTH = null;
       const adminBar = document.getElementById('admin-tabs-bar');
       if (adminBar) adminBar.classList.add('hidden');
       switchTab('cajero');
       actualizarBotonAdminUI(false);
-      mostrarToast("Sesión de Administrador cerrada", "info");
+      if (!silencioso) mostrarToast("Sesión de Administrador cerrada", "info");
     }
 
     function actualizarBotonAdminUI(autenticado) {
@@ -1922,7 +1976,7 @@
                     ${dots}
                   </span>
                 </div>
-                <p class="text-[10px] text-blue-300">PIN de prueba para ${ATM_STATE.titular}: <b class="text-white">${ATM_STATE.correctPin}</b></p>
+                <p class="text-[10px] text-blue-300">El PIN viaja cifrado (PIN block ISO 9564, DE 52) y lo valida el Core Bancario</p>
               </div>
               <div class="h-12 flex justify-end items-center">
                 <button onclick="pressSideButton('R4')" class="h-11 font-bold text-rose-300 bg-rose-950/80 hover:bg-rose-900 px-3 rounded-r-lg border-r-4 border-rose-500 text-right transition flex items-center shadow text-xs">
@@ -1979,7 +2033,7 @@
               <div class="h-12 flex justify-between items-center">
                 <button onclick="pressSideButton('L4')" class="h-11 font-bold ${btnBg} px-3 rounded-l-lg border-l-4 text-left transition flex items-center shadow text-xs">
                   <svg class="w-3.5 h-3.5 ${btnIcon} mr-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M15 19l-7-7 7-7"/></svg>
-                  <span>4. INFORMACIÓN PIN</span>
+                  <span>4. SEGURIDAD PIN</span>
                 </button>
                 <button onclick="pressSideButton('R4')" class="h-11 font-bold text-rose-300 bg-rose-950/80 hover:bg-rose-900 px-3 rounded-r-lg border-r-4 border-rose-500 text-right transition flex items-center justify-end shadow text-xs">
                   <span>8. SALIR / EXPULSAR</span>
@@ -2168,7 +2222,7 @@
               </div>
               <div class="h-12 flex justify-end items-center">
                 <button onclick="pressSideButton('R4')" class="h-11 font-bold text-white bg-blue-900 hover:bg-blue-800 px-3 rounded-r-lg border-r-4 border-blue-400 shadow flex items-center text-xs">
-                  <span>VOLVER AL MENÚ (F8)</span>
+                  <span>${ATM_STATE.lastTxResult.codigoRespuestaIso === '55' ? 'REINGRESAR PIN (F8)' : (ATM_STATE.lastTxResult.codigoRespuestaIso === '75' ? 'RETIRAR TARJETA (F8)' : 'VOLVER AL MENÚ (F8)')}</span>
                   <svg class="w-3.5 h-3.5 ml-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2.5" d="M9 5l7 7-7 7"/></svg>
                 </button>
               </div>
@@ -2322,7 +2376,7 @@
 
         const bInfo = obtenerBancoInfo(c.banco);
         return `
-          <div class="p-3 bg-slate-950 border border-slate-800 hover:border-cyan-400/50 rounded-xl flex items-center justify-between transition cursor-pointer group" onclick="seleccionarTarjetaModal('${c.numeroCuenta}', '${c.pan}', '${c.titular}', '${c.pin || '1234'}', '${c.banco || 'BANCO INDUSTRIAL'}')">
+          <div class="p-3 bg-slate-950 border border-slate-800 hover:border-cyan-400/50 rounded-xl flex items-center justify-between transition cursor-pointer group" onclick="seleccionarTarjetaModal('${c.numeroCuenta}', '${c.pan}', '${c.titular}', '${c.banco || 'BANCO INDUSTRIAL'}')">
             <div class="flex items-center space-x-3">
               <div class="w-10 h-10 rounded-lg bg-gradient-to-br from-slate-800 to-slate-900 border border-slate-700 flex items-center justify-center text-amber-400 group-hover:border-cyan-400/50 flex-shrink-0">
                 ${bInfo.svgLogoPequeno || '<svg class="w-5 h-5 text-cyan-400" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h18M7 15h1m4 0h1m-7 4h12a3 3 0 003-3V8a3 3 0 00-3-3H6a3 3 0 00-3 3v8a3 3 0 003 3z"/></svg>'}
@@ -2337,7 +2391,7 @@
                 <div class="flex items-center space-x-2 text-[10px] text-slate-400 font-mono mt-0.5">
                   <span>${c.pan ? c.pan.substring(0,4) + ' •••• ' + c.pan.substring(12) : '----'}</span>
                   <span>•</span>
-                  <span>PIN: <b class="text-amber-300">${c.pin || '1234'}</b></span>
+                  <span>${c.numeroCuenta}</span>
                   <span>•</span>
                   <span class="text-emerald-400 font-bold">Q. ${c.saldoDisponible.toFixed(2)}</span>
                 </div>
@@ -2352,9 +2406,9 @@
       }).join('');
     }
 
-    function seleccionarTarjetaModal(cuenta, pan, titular, pin, banco) {
+    function seleccionarTarjetaModal(cuenta, pan, titular, banco) {
       cerrarModalSeleccionarTarjeta();
-      seleccionarTarjetaPreset(cuenta, pan, titular, pin, banco);
+      seleccionarTarjetaPreset(cuenta, pan, titular, banco);
     }
 
     function insertarTarjetaManual() {
@@ -2369,10 +2423,10 @@
       }
       const encontrada = (LISTA_CUENTAS_CACHE || []).find(c => c.pan === pan);
       if (encontrada) {
-        seleccionarTarjetaModal(encontrada.numeroCuenta, encontrada.pan, encontrada.titular, encontrada.pin || '1234', encontrada.banco);
+        seleccionarTarjetaModal(encontrada.numeroCuenta, encontrada.pan, encontrada.titular, encontrada.banco);
       } else {
         const bancoDet = detectarBancoPorPan(pan);
-        seleccionarTarjetaModal("CTA-MANUAL", pan, "CLIENTE EXTERNO", "1234", bancoDet);
+        seleccionarTarjetaModal("CTA-MANUAL", pan, "CLIENTE EXTERNO", bancoDet);
       }
     }
 
@@ -2390,6 +2444,8 @@
       ATM_STATE.cardInserted = false;
       ATM_STATE.currentScreen = 'WELCOME';
       ATM_STATE.enteredPin = '';
+      ATM_STATE.pinTarjeta = null;
+      ATM_STATE.ultimaTx = null;
       ATM_STATE.banco = null;
       actualizarBrandingBanco('RED_NEXUS');
       document.getElementById('card-inserted-indicator').classList.add('hidden');
@@ -2400,11 +2456,12 @@
       renderScreen();
     }
 
-    function seleccionarTarjetaPreset(cuenta, pan, titular, pin, banco) {
+    function seleccionarTarjetaPreset(cuenta, pan, titular, banco) {
       ATM_STATE.account = cuenta;
       ATM_STATE.pan = pan;
       ATM_STATE.titular = titular;
-      ATM_STATE.correctPin = pin;
+      ATM_STATE.pinTarjeta = null;
+      ATM_STATE.ultimaTx = null;
       ATM_STATE.banco = banco || detectarBancoPorPan(pan);
       actualizarBrandingBanco(ATM_STATE.banco);
       insertarTarjeta();
@@ -2414,6 +2471,27 @@
       ATM_STATE.currentScreen = 'MAIN_MENU';
       ATM_STATE.enteredPin = '';
       renderScreen();
+    }
+
+    // El PIN tecleado se conserva solo en memoria para firmar las tramas de esta sesión de tarjeta
+    function confirmarPin() {
+      ATM_STATE.pinTarjeta = ATM_STATE.enteredPin;
+      irAMenuPrincipal();
+    }
+
+    // Salida de la pantalla de rechazo según el DE 39 recibido
+    function salirDePantallaError() {
+      const rc = ATM_STATE.lastTxResult ? ATM_STATE.lastTxResult.codigoRespuestaIso : null;
+      if (rc === '55') { // PIN incorrecto: se vuelve a solicitar
+        ATM_STATE.pinTarjeta = null;
+        ATM_STATE.enteredPin = '';
+        ATM_STATE.currentScreen = 'PIN_ENTRY';
+        renderScreen();
+      } else if (rc === '75') { // intentos de PIN excedidos: tarjeta bloqueada
+        expulsarTarjeta();
+      } else {
+        irAMenuPrincipal();
+      }
     }
 
     // ================= TECLADO METÁLICO (PIN PAD) =================
@@ -2441,8 +2519,7 @@
         }
         if (key === 'ENTER') {
           if (ATM_STATE.enteredPin.length >= 4) {
-            ATM_STATE.currentScreen = 'MAIN_MENU';
-            renderScreen();
+            confirmarPin();
           } else {
             mostrarModalAlerta({
               titulo: "LONGITUD DE PIN INVÁLIDA",
@@ -2457,8 +2534,7 @@
           renderScreen();
           if (ATM_STATE.enteredPin.length === 4) {
             setTimeout(() => {
-              ATM_STATE.currentScreen = 'MAIN_MENU';
-              renderScreen();
+              if (ATM_STATE.currentScreen === 'PIN_ENTRY' && ATM_STATE.enteredPin.length === 4) confirmarPin();
             }, 300);
           }
         }
@@ -2610,7 +2686,8 @@
           return;
         } else if (e.key === 'Enter') {
           e.preventDefault();
-          irAMenuPrincipal();
+          if (ATM_STATE.currentScreen === 'ERROR') salirDePantallaError();
+          else irAMenuPrincipal();
           return;
         }
       }
@@ -2648,14 +2725,14 @@
           renderScreen();
         } else if (btn === 'L3') { // 3. Consulta Saldo
           ejecutarTransaccionIso('0100', '300000', 0);
-        } else if (btn === 'L4') { // 4. Info PIN
+        } else if (btn === 'L4') { // 4. Seguridad del PIN
           mostrarModalAlerta({
-            titulo: "CREDENCIAL DE SEGURIDAD",
-            mensaje: "PIN secreto verificado de la tarjeta: " + ATM_STATE.correctPin,
+            titulo: "SEGURIDAD DEL PIN",
+            mensaje: "El cajero no guarda ni muestra su PIN. Se envía dentro de la trama ISO 8583 como PIN block ISO 9564 formato 0 (DE 52) y el Core Bancario lo compara contra un hash SHA-256. Un PIN incorrecto responde DE 39 = 55 y tras 3 intentos fallidos la tarjeta se bloquea (DE 39 = 75).",
             tipo: "pin"
           });
-        } else if (btn === 'R1') { // 5. Reversa MTI 0420
-          ejecutarTransaccionIso('0420', '010000', 100);
+        } else if (btn === 'R1') { // 5. Reversa MTI 0420 del último retiro aprobado
+          ejecutarTransaccionIso('0420', '010000', 0);
         } else if (btn === 'R2') { // 6. Echo Test MTI 0800
           ejecutarTransaccionIso('0800', '000000', 0);
         } else if (btn === 'R3') { // 7. Estado de Cuenta
@@ -2698,6 +2775,7 @@
       } else if (ATM_STATE.currentScreen === 'PIN_ENTRY' || ATM_STATE.currentScreen === 'CUSTOM_AMOUNT' || ATM_STATE.currentScreen === 'ERROR' || ATM_STATE.currentScreen === 'ACCOUNT_STATEMENT') {
         if (btn === 'R4') {
           if (ATM_STATE.currentScreen === 'PIN_ENTRY') expulsarTarjeta();
+          else if (ATM_STATE.currentScreen === 'ERROR') salirDePantallaError();
           else irAMenuPrincipal();
         }
       }
@@ -2707,22 +2785,26 @@
       ATM_STATE.currentScreen = 'ACCOUNT_STATEMENT';
       renderScreen();
       try {
-        const res = await fetch('/api/core/transacciones');
-        const txs = await res.json();
-        const misTxs = txs.filter(t => t.numeroCuenta === ATM_STATE.account).slice(0, 4);
+        const res = await fetch(`/api/core/cuentas/${encodeURIComponent(ATM_STATE.account)}/transacciones?limite=4`);
+        const misTxs = res.ok ? await res.json() : [];
         const container = document.getElementById('atm-statement-txs');
         if (container) {
           if (!misTxs || misTxs.length === 0) {
             container.innerHTML = '<p class="text-slate-400 text-center py-2">Sin movimientos recientes registrados.</p>';
           } else {
-            container.innerHTML = misTxs.map(t => `
+            container.innerHTML = misTxs.map(t => {
+              const aprobada = t.codigoRespuesta === '00';
+              const credito = t.tipoOperacion === 'REVERSA' || t.tipoOperacion === 'DEVOLUCION';
+              const signo = (!aprobada || t.tipoOperacion === 'CONSULTA') ? '' : (credito ? '+' : '-');
+              const color = !aprobada ? 'text-slate-500' : (credito ? 'text-emerald-400' : 'text-rose-400');
+              return `
               <div class="flex justify-between border-b border-slate-800 py-1 font-mono">
-                <span class="text-slate-300">${t.timestamp ? t.timestamp.substring(11, 19) : '--:--'} • ${t.tipoTransaccion}</span>
-                <span class="${t.tipoTransaccion === 'RETIRO' ? 'text-rose-400' : 'text-emerald-400'} font-bold">
-                  ${t.tipoTransaccion === 'RETIRO' ? '-' : '+'}Q. ${t.monto.toFixed(2)}
+                <span class="text-slate-300">${t.fechaHora ? t.fechaHora.substring(11, 19) : '--:--'} • ${t.tipoOperacion}${aprobada ? '' : ' (DE39 ' + t.codigoRespuesta + ')'}</span>
+                <span class="${color} font-bold">
+                  ${signo}Q. ${Number(t.monto || 0).toFixed(2)}
                 </span>
-              </div>
-            `).join('');
+              </div>`;
+            }).join('');
           }
         }
       } catch (e) {
@@ -2732,13 +2814,30 @@
 
     // ================= EJECUCIÓN TRANSACCIONAL ISO 8583 =================
     async function ejecutarTransaccionIso(mti, procCode, monto) {
+      // La reversa (0420) anula el último retiro aprobado: mismo RRN original (DE 37), monto (DE 4) y DE 3
+      let rrnOriginal = null;
+      if (mti === '0420') {
+        const ultima = ATM_STATE.ultimaTx;
+        if (!ultima) {
+          mostrarModalAlerta({
+            titulo: "SIN TRANSACCIÓN QUE REVERSAR",
+            mensaje: "No hay un retiro aprobado en esta sesión de tarjeta. Realice un retiro (0200) antes de solicitar la reversa (0420).",
+            tipo: "warning"
+          });
+          return;
+        }
+        rrnOriginal = ultima.rrn;
+        procCode = ultima.procCode;
+        monto = ultima.monto;
+      }
+
       ATM_STATE.currentScreen = 'PROCESSING';
       renderScreen();
 
       animarFlujoArquitectura(true);
 
       const stan = Math.floor(100000 + Math.random() * 900000).toString();
-      const rrn = "2627" + Math.floor(10000000 + Math.random() * 90000000).toString();
+      const rrn = rrnOriginal || ("2627" + Math.floor(10000000 + Math.random() * 90000000).toString());
 
       const payload = {
         mti: mti,
@@ -2751,6 +2850,10 @@
         rrn: rrn,
         moneda: "GTQ"
       };
+      // Retiros y consultas viajan con el PIN; el Recolector lo cifra como PIN block ISO 9564 (DE 52)
+      if ((mti === '0200' || mti === '0100') && ATM_STATE.pinTarjeta) {
+        payload.pin = ATM_STATE.pinTarjeta;
+      }
 
       try {
         const res = await fetch('/api/iso/simular', {
@@ -2761,6 +2864,11 @@
 
         const data = await res.json();
         ATM_STATE.lastTxResult = data;
+        if (mti === '0200' && data.exitosa) {
+          ATM_STATE.ultimaTx = { rrn: rrn, monto: monto, procCode: procCode };
+        } else if (mti === '0420' && data.exitosa) {
+          ATM_STATE.ultimaTx = null; // ya reversada
+        }
 
         // Actualizar visualizador técnico de Bitmap y Trama
         actualizarVisorTecnico(data);
@@ -2768,11 +2876,11 @@
         setTimeout(() => {
           animarFlujoArquitectura(false);
 
-          if (mti === '0100') {
+          if (mti === '0100' && data.exitosa) {
             ATM_STATE.currentScreen = 'BALANCE_DISPLAY';
           } else if (data.exitosa) {
             ATM_STATE.currentScreen = 'SUCCESS';
-            if (monto > 0) {
+            if (mti === '0200' && monto > 0) {
               mostrarEfectivoDispensado(monto);
             }
             prepararReciboFisico(data);
@@ -3038,8 +3146,6 @@
 
         const bInfo = obtenerBancoInfo(c.banco);
         const panMasked = c.pan ? `${c.pan.substring(0,4)} •••• •••• ${c.pan.substring(12)}` : '---';
-        const pinVal = c.pin || '1234';
-
         const tr = document.createElement('tr');
         tr.className = "hover:bg-slate-800/40 transition";
         tr.innerHTML = `
@@ -3048,7 +3154,7 @@
           <td class="py-2.5 px-3"><span class="px-2 py-0.5 rounded text-[10px] font-bold ${bInfo.badgeBg}">${c.banco || 'BANCO INDUSTRIAL'}</span></td>
           <td class="py-2.5 px-3 font-mono text-slate-300">${panMasked}</td>
           <td class="py-2.5 px-2 text-center">
-            <span class="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700 font-mono font-bold text-amber-300 text-[11px]">${pinVal}</span>
+            <span class="px-1.5 py-0.5 rounded bg-slate-950 border border-slate-700 font-mono font-bold text-amber-300 text-[11px]" title="Almacenado como hash SHA-256; no es recuperable">••••</span>
           </td>
           <td class="py-2.5 px-3 font-mono font-extrabold text-emerald-400">Q. ${c.saldoDisponible.toFixed(2)}</td>
           <td class="py-2.5 px-3 font-mono text-slate-300">Q. ${c.limiteDiario.toFixed(2)}</td>
@@ -3101,18 +3207,16 @@
 
         const bInfo = obtenerBancoInfo(c.banco);
         const panMasked = c.pan ? `${c.pan.substring(0,4)} ${c.pan.substring(4,6)}** **** ${c.pan.substring(12)}` : '----';
-        const pinVal = c.pin || '1234';
-
         const cardDiv = document.createElement('div');
         cardDiv.className = "p-3 rounded-xl bg-slate-950 hover:bg-slate-800/80 border border-slate-800 cursor-pointer flex items-center justify-between transition group";
-        cardDiv.onclick = () => seleccionarTarjetaPreset(c.numeroCuenta, c.pan, c.titular, pinVal, c.banco);
+        cardDiv.onclick = () => seleccionarTarjetaPreset(c.numeroCuenta, c.pan, c.titular, c.banco);
         cardDiv.innerHTML = `
           <div>
             <div class="flex items-center space-x-2 mb-0.5">
               <span class="px-1.5 py-0.5 rounded text-[9px] font-bold ${bInfo.badgeBg}">${bInfo.alias}</span>
               <p class="font-bold text-white group-hover:text-amber-300 transition">${panMasked} - ${c.titular}</p>
             </div>
-            <p class="text-[11px] text-slate-400">Saldo: <b class="text-emerald-400 font-mono">Q. ${c.saldoDisponible.toFixed(2)}</b> • PIN: <b class="text-amber-300 font-mono">${pinVal}</b> • <span class="text-slate-300">${c.banco || 'BANCO INDUSTRIAL'}</span></p>
+            <p class="text-[11px] text-slate-400">Saldo: <b class="text-emerald-400 font-mono">Q. ${c.saldoDisponible.toFixed(2)}</b> • <span class="font-mono">${c.numeroCuenta}</span> • <span class="text-slate-300">${c.banco || 'BANCO INDUSTRIAL'}</span></p>
           </div>
           ${statusBadge}
         `;
@@ -3192,7 +3296,7 @@
       const banco = document.getElementById('crear-banco').value;
       const numeroCuenta = document.getElementById('crear-cuenta').value.trim();
       const pan = document.getElementById('crear-pan').value.trim();
-      const pin = document.getElementById('crear-pin').value.trim() || '1234';
+      const pin = document.getElementById('crear-pin').value.trim();
       const saldo = parseFloat(document.getElementById('crear-saldo').value) || 0;
       const limite = parseFloat(document.getElementById('crear-limite').value) || 500;
       const estado = document.getElementById('crear-estado').value;
@@ -3213,6 +3317,14 @@
         });
         return;
       }
+      if (!/^\d{4}$/.test(pin)) {
+        mostrarModalAlerta({
+          titulo: "PIN INVÁLIDO",
+          mensaje: "El PIN de la tarjeta debe tener exactamente 4 dígitos numéricos.",
+          tipo: "warning"
+        });
+        return;
+      }
 
       try {
         const payload = {
@@ -3226,7 +3338,7 @@
           pin: pin
         };
 
-        const res = await fetch('/api/core/cuentas', {
+        const res = await fetchAdmin('/api/core/cuentas', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -3241,14 +3353,14 @@
             tipo: "success"
           });
         } else {
-          const errData = await res.json();
           mostrarModalAlerta({
             titulo: "ERROR AL CREAR CUENTA",
-            mensaje: (errData.error || res.statusText),
+            mensaje: await mensajeErrorServidor(res, `HTTP ${res.status}`),
             tipo: "error"
           });
         }
       } catch (err) {
+        if (err.sesionInvalida) return;
         mostrarModalAlerta({
           titulo: "FALLA DE CONEXIÓN",
           mensaje: "Error de comunicación con el Core Bancario: " + err,
@@ -3267,7 +3379,7 @@
       document.getElementById('editar-titular').value = c.titular;
       document.getElementById('editar-banco').value = c.banco || 'BANCO INDUSTRIAL';
       document.getElementById('editar-pan').value = c.pan;
-      document.getElementById('editar-pin').value = c.pin || '1234';
+      document.getElementById('editar-pin').value = '';
       document.getElementById('editar-saldo').value = c.saldoDisponible;
       document.getElementById('editar-limite').value = c.limiteDiario;
       document.getElementById('editar-estado').value = c.estado;
@@ -3283,10 +3395,18 @@
       const id = document.getElementById('editar-cuenta-id').value;
       const titular = document.getElementById('editar-titular').value.trim();
       const banco = document.getElementById('editar-banco').value;
-      const pin = document.getElementById('editar-pin').value.trim() || '1234';
+      const pin = document.getElementById('editar-pin').value.trim() || null; // vacío: conserva el PIN actual
       const saldo = parseFloat(document.getElementById('editar-saldo').value);
       const limite = parseFloat(document.getElementById('editar-limite').value);
       const estado = document.getElementById('editar-estado').value;
+      if (pin !== null && !/^\d{4}$/.test(pin)) {
+        mostrarModalAlerta({
+          titulo: "PIN INVÁLIDO",
+          mensaje: "El nuevo PIN debe tener exactamente 4 dígitos numéricos (o déjelo vacío para conservar el actual).",
+          tipo: "warning"
+        });
+        return;
+      }
 
       try {
         const payload = {
@@ -3298,7 +3418,7 @@
           pin: pin
         };
 
-        const res = await fetch(`/api/core/cuentas/${id}`, {
+        const res = await fetchAdmin(`/api/core/cuentas/${id}`, {
           method: 'PUT',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(payload)
@@ -3311,11 +3431,12 @@
         } else {
           mostrarModalAlerta({
             titulo: "ERROR AL ACTUALIZAR",
-            mensaje: "No se pudo actualizar la cuenta en la base de datos.",
+            mensaje: await mensajeErrorServidor(res, "No se pudo actualizar la cuenta en la base de datos."),
             tipo: "error"
           });
         }
       } catch (err) {
+        if (err.sesionInvalida) return;
         mostrarModalAlerta({
           titulo: "FALLA DE CONEXIÓN",
           mensaje: "Error de red al actualizar la cuenta: " + err,
@@ -3353,11 +3474,13 @@
         return;
       }
       try {
-        await fetch(`/api/core/cuentas/${id}/recargar?monto=${monto}`, { method: 'POST' });
+        const res = await fetchAdmin(`/api/core/cuentas/${id}/recargar?monto=${monto}`, { method: 'POST' });
+        if (!res.ok) throw new Error(await mensajeErrorServidor(res, `HTTP ${res.status}`));
         cerrarModalDeposito();
         await cargarDatosAdmin();
         mostrarToast(`Depósito de Q. ${monto.toFixed(2)} aplicado exitosamente`, "success");
       } catch (err) {
+        if (err.sesionInvalida) return;
         mostrarModalAlerta({
           titulo: "ERROR EN DEPÓSITO",
           mensaje: "Falla al aplicar el depósito en el Core: " + err,
@@ -3376,7 +3499,7 @@
       document.getElementById('card-modal-pan').innerText = panFormatted;
       document.getElementById('card-modal-titular').innerText = c.titular;
       document.getElementById('card-modal-cuenta').innerText = c.numeroCuenta;
-      document.getElementById('card-modal-pin-badge').innerText = c.pin || '1234';
+      document.getElementById('card-modal-pin-badge').innerText = '•••• (hash SHA-256)';
       document.getElementById('card-modal-saldo').innerText = `Q. ${c.saldoDisponible.toFixed(2)}`;
 
       const bankLogo = document.getElementById('card-modal-bank-logo');
@@ -3423,7 +3546,7 @@
         cerrarModalVerTarjeta();
         switchTab('cajero');
         setTimeout(() => {
-          seleccionarTarjetaPreset(c.numeroCuenta, c.pan, c.titular, c.pin || '1234', c.banco);
+          seleccionarTarjetaPreset(c.numeroCuenta, c.pan, c.titular, c.banco);
         }, 150);
       };
 
@@ -3437,21 +3560,25 @@
     // ================= ACCIONES DIRECTAS EN CUENTAS =================
     async function recargarCuenta(cuentaId, monto) {
       try {
-        await fetch(`/api/core/cuentas/${cuentaId}/recargar?monto=${monto}`, { method: 'POST' });
+        const res = await fetchAdmin(`/api/core/cuentas/${cuentaId}/recargar?monto=${monto}`, { method: 'POST' });
+        if (!res.ok) throw new Error(await mensajeErrorServidor(res, `HTTP ${res.status}`));
         cargarDatosAdmin();
         mostrarToast(`Recarga de Q. ${monto.toFixed(2)} aplicada exitosamente`, "success");
       } catch (err) {
-        mostrarToast("Error al recargar cuenta: " + err, "error");
+        if (err.sesionInvalida) return;
+        mostrarToast("Error al recargar cuenta: " + err.message, "error");
       }
     }
 
     async function toggleBloqueoCuenta(cuentaId) {
       try {
-        await fetch(`/api/core/cuentas/${cuentaId}/toggle-bloqueo`, { method: 'POST' });
+        const res = await fetchAdmin(`/api/core/cuentas/${cuentaId}/toggle-bloqueo`, { method: 'POST' });
+        if (!res.ok) throw new Error(await mensajeErrorServidor(res, `HTTP ${res.status}`));
         cargarDatosAdmin();
         mostrarToast("Estado de cuenta actualizado correctamente", "info");
       } catch (err) {
-        mostrarToast("Error al alternar bloqueo de cuenta: " + err, "error");
+        if (err.sesionInvalida) return;
+        mostrarToast("Error al alternar bloqueo de cuenta: " + err.message, "error");
       }
     }
 
@@ -3465,7 +3592,7 @@
       });
       if (!confirmado) return;
       try {
-        const res = await fetch(`/api/core/cuentas/${cuentaId}`, { method: 'DELETE' });
+        const res = await fetchAdmin(`/api/core/cuentas/${cuentaId}`, { method: 'DELETE' });
         if (res.ok) {
           mostrarToast(`Cuenta ${cuentaId} eliminada exitosamente`, 'success');
           cargarDatosAdmin();
@@ -3477,6 +3604,7 @@
           });
         }
       } catch (err) {
+        if (err.sesionInvalida) return;
         mostrarModalAlerta({
           titulo: "ERROR DE CONEXIÓN",
           mensaje: "Falla al intentar eliminar la cuenta: " + err,
@@ -3495,7 +3623,8 @@
       });
       if (!confirmado) return;
       try {
-        await fetch('/api/core/reset', { method: 'POST' });
+        const res = await fetchAdmin('/api/core/reset', { method: 'POST' });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
         cargarDatosAdmin();
         mostrarModalAlerta({
           titulo: "BASE DE DATOS RESTAURADA",
@@ -3503,6 +3632,7 @@
           tipo: "success"
         });
       } catch (err) {
+        if (err.sesionInvalida) return;
         mostrarModalAlerta({
           titulo: "ERROR AL RESTAURAR",
           mensaje: "No se pudo completar el reseteo: " + err,
@@ -3521,9 +3651,11 @@
       const monto = parseFloat(document.getElementById('sim-monto').value) || 0;
       const cuenta = document.getElementById('sim-cuenta').value;
       const terminal = document.getElementById('sim-terminal').value;
+      const pin = document.getElementById('sim-pin').value.trim();
+      const rrnManual = document.getElementById('sim-rrn').value.trim();
 
       const stan = Math.floor(100000 + Math.random() * 900000).toString();
-      const rrn = "2627" + Math.floor(10000000 + Math.random() * 90000000).toString();
+      const rrn = rrnManual || ("2627" + Math.floor(10000000 + Math.random() * 90000000).toString());
 
       const payload = {
         mti: mti,
@@ -3535,6 +3667,7 @@
         rrn: rrn,
         moneda: "GTQ"
       };
+      if (pin) payload.pin = pin;
 
       try {
         const res = await fetch('/api/iso/simular', {
