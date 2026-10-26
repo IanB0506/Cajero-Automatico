@@ -1,310 +1,415 @@
 package com.banco.recolector.corebancario.service;
 
+import com.banco.recolector.corebancario.CrearCuentaRequest;
 import com.banco.recolector.corebancario.CuentaDto;
+import com.banco.recolector.corebancario.EditarCuentaRequest;
 import com.banco.recolector.corebancario.TransaccionCoreRequest;
 import com.banco.recolector.corebancario.TransaccionCoreResponse;
 import com.banco.recolector.corebancario.entity.CuentaEntity;
 import com.banco.recolector.corebancario.entity.TransaccionEntity;
 import com.banco.recolector.corebancario.repository.CuentaRepository;
 import com.banco.recolector.corebancario.repository.TransaccionRepository;
-import com.banco.recolector.iso.IsoResponseCode;
-import jakarta.annotation.PostConstruct;
+import com.banco.recolector.iso.PinBlock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.math.BigDecimal;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+import static com.banco.recolector.corebancario.TransaccionCoreRequest.*;
+import static com.banco.recolector.iso.IsoResponseCode.*;
 
 /**
- * Servicio de Lógica de Negocio del Core Bancario.
- * Gestiona cuentas, valida saldos y límites, y registra débitos y créditos en la tabla de transacciones.
+ * Lógica de negocio del Core Bancario: valida cuentas, PIN, saldos y límites, y registra cada
+ * débito o crédito en la tabla de transacciones.
+ *
+ * <p>Concurrencia: las cuentas involucradas se bloquean con un bloqueo pesimista (en orden de id para
+ * evitar interbloqueos) y la restricción única (RRN, STAN) garantiza que una transacción se aplique una
+ * sola vez aunque lleguen duplicados simultáneos.
  */
 @Service
 public class CoreBancarioService {
 
     private static final Logger log = LoggerFactory.getLogger(CoreBancarioService.class);
 
+    private static final String ACTIVA = "ACTIVE";
+    private static final String BLOQUEADA = "BLOCKED";
+    private static final String VENCIDA = "EXPIRED";
+    private static final Set<String> REQUIEREN_PIN = Set.of(RETIRO, CONSULTA, TRANSFERENCIA);
+    private static final int MAX_INTENTOS_PIN = 3;
+    private static final int MAX_LISTADO = 1000;
+
     private final CuentaRepository cuentaRepository;
     private final TransaccionRepository transaccionRepository;
-    private final AtomicLong authCodeSeq = new AtomicLong(100001);
+    private final TransactionTemplate transactionTemplate;
 
-    public CoreBancarioService(CuentaRepository cuentaRepository, TransaccionRepository transaccionRepository) {
+    private final AtomicLong secuenciaAutorizacion = new AtomicLong(-1);
+    private final ReentrantLock lockSecuencia = new ReentrantLock();
+
+    public CoreBancarioService(CuentaRepository cuentaRepository,
+                               TransaccionRepository transaccionRepository,
+                               PlatformTransactionManager transactionManager) {
         this.cuentaRepository = cuentaRepository;
         this.transaccionRepository = transaccionRepository;
+        this.transactionTemplate = new TransactionTemplate(transactionManager);
     }
 
-    @PostConstruct
-    public void verificarConexionBaseDatos() {
-        long totalCuentas = cuentaRepository.count();
-        log.info("Conexión exitosa a Microsoft SQL Server (CoreBancario5B). Cuentas registradas en BD: {}", totalCuentas);
+    // =====================================================================================
+    // Procesamiento transaccional
+    // =====================================================================================
 
-        // Asignar bancos a las cuentas en base de datos si no lo tienen asignado
-        List<CuentaEntity> cuentas = cuentaRepository.findAll();
-        for (CuentaEntity c : cuentas) {
-            String pan = c.getPan();
-            String num = c.getNumeroCuenta();
-            if (c.getBanco() == null || c.getBanco().isBlank() || "BANCO INDUSTRIAL".equals(c.getBanco())) {
-                if (pan != null && pan.startsWith("5412")) {
-                    c.setBanco("G&T CONTINENTAL");
-                    cuentaRepository.save(c);
-                } else if (pan != null && (pan.endsWith("0003") || (pan.startsWith("4000") && num != null && num.endsWith("3003")))) {
-                    c.setBanco("BANRURAL");
-                    cuentaRepository.save(c);
-                } else if (pan != null && (pan.endsWith("0004") || (num != null && num.endsWith("3004")))) {
-                    c.setBanco("BAC CREDOMATIC");
-                    cuentaRepository.save(c);
-                } else if (pan != null && (pan.endsWith("0005") || (num != null && num.endsWith("3005")))) {
-                    c.setBanco("BANCO PROMERICA");
-                    cuentaRepository.save(c);
-                } else if (pan != null && pan.startsWith("4532")) {
-                    c.setBanco("BANCO INDUSTRIAL");
-                    cuentaRepository.save(c);
-                }
-            }
-        }
-    }
-
-    @Transactional
     public TransaccionCoreResponse procesar(TransaccionCoreRequest req) {
-        log.info("Core Bancario procesando operación [{}] RRN={} STAN={} Monto={}",
-                req.tipoOperacion(), req.rrn(), req.stan(), req.monto());
-
-        // 1. Verificar Idempotencia a nivel de base de datos
-        Optional<TransaccionEntity> txExistente = transaccionRepository.findByRrnAndStan(req.rrn(), req.stan());
-        if (txExistente.isPresent()) {
-            TransaccionEntity te = txExistente.get();
-            log.warn("Detectada transacción duplicada en Core Bancario (Idempotente): RRN={} STAN={}", req.rrn(), req.stan());
-            return new TransaccionCoreResponse(
-                    IsoResponseCode.APROBADA.equals(te.getCodigoRespuesta()),
-                    te.getCodigoRespuesta(),
-                    te.getCodigoAutorizacion(),
-                    te.getSaldoPosterior(),
-                    te.getSaldoPosterior(),
-                    "Transacción previa recuperada por Idempotencia",
-                    te.getRrn(),
-                    te.getFechaHora().toString()
-            );
-        }
-
-        // 2. Localizar Cuenta por Número de Cuenta o PAN
-        String identificador = req.cuentaOrigen() != null ? req.cuentaOrigen() : req.pan();
-        Optional<CuentaEntity> optCuenta = cuentaRepository.findByNumeroCuentaOrPan(identificador, identificador);
-        if (optCuenta.isEmpty()) {
-            log.warn("Cuenta o Tarjeta no encontrada: {}", identificador);
-            registrarTransaccionFallida(req, identificador, IsoResponseCode.CUENTA_INVALIDA);
-            return TransaccionCoreResponse.rechazada(
-                    req.rrn(), IsoResponseCode.CUENTA_INVALIDA, "Cuenta o Tarjeta no existe en el Core Bancario",
-                    BigDecimal.ZERO, BigDecimal.ZERO
-            );
-        }
-
-        CuentaEntity cuenta = optCuenta.get();
-        BigDecimal saldoInicial = cuenta.getSaldoDisponible();
-
-        // 3. Validar Estado de la Cuenta
-        if ("BLOCKED".equalsIgnoreCase(cuenta.getEstado())) {
-            log.warn("Transacción rechazada: Cuenta/Tarjeta BLOQUEADA: {}", cuenta.getNumeroCuenta());
-            registrarTransaccionFallida(req, cuenta.getNumeroCuenta(), IsoResponseCode.TARJETA_BLOQUEADA);
-            return TransaccionCoreResponse.rechazada(
-                    req.rrn(), IsoResponseCode.TARJETA_BLOQUEADA, "Cuenta o Tarjeta Bloqueada",
-                    cuenta.getSaldoDisponible(), cuenta.getSaldoContable()
-            );
-        }
-
-        if ("EXPIRED".equalsIgnoreCase(cuenta.getEstado())) {
-            log.warn("Transacción rechazada: Tarjeta VENCIDA: {}", cuenta.getNumeroCuenta());
-            registrarTransaccionFallida(req, cuenta.getNumeroCuenta(), IsoResponseCode.TARJETA_EXPIRADA);
-            return TransaccionCoreResponse.rechazada(
-                    req.rrn(), IsoResponseCode.TARJETA_EXPIRADA, "Tarjeta Vencida / Expirada",
-                    cuenta.getSaldoDisponible(), cuenta.getSaldoContable()
-            );
-        }
-
-        // 4. Validar Límite Diario para Retiros en Cajero
-        if ("RETIRO".equalsIgnoreCase(req.tipoOperacion())) {
-            BigDecimal totalRetiros = cuenta.getRetiradoHoy().add(req.monto());
-            if (totalRetiros.compareTo(cuenta.getLimiteDiario()) > 0) {
-                log.warn("Transacción rechazada: Excede límite diario de retiro: {} > {}", totalRetiros, cuenta.getLimiteDiario());
-                registrarTransaccionFallida(req, cuenta.getNumeroCuenta(), IsoResponseCode.LIMITE_EXCEDIDO);
-                return TransaccionCoreResponse.rechazada(
-                        req.rrn(), IsoResponseCode.LIMITE_EXCEDIDO, "Supera el Límite Diario de Retiros",
-                        cuenta.getSaldoDisponible(), cuenta.getSaldoContable()
-                );
+        try {
+            return transactionTemplate.execute(status -> procesarEnTransaccion(req));
+        } catch (DataIntegrityViolationException duplicada) {
+            // El RRN/STAN ya estaba registrado (retransmisión o duplicado simultáneo): todo lo hecho en esta
+            // transacción se revirtió y se devuelve el resultado original sin reaplicarlo
+            TransaccionCoreResponse previa = transactionTemplate.execute(status ->
+                    transaccionRepository.findByRrnAndStan(req.rrn(), req.stan())
+                            .map(this::respuestaIdempotente)
+                            .orElse(null));
+            if (previa == null) {
+                throw duplicada;
             }
+            log.info("Transacción duplicada (idempotencia del Core por RRN/STAN): RRN={} STAN={}", req.rrn(), req.stan());
+            return previa;
         }
-
-        // 5. Validar Fondos Disponibles para Débitos
-        boolean esDebito = "COMPRA".equalsIgnoreCase(req.tipoOperacion()) || "RETIRO".equalsIgnoreCase(req.tipoOperacion());
-        if (esDebito) {
-            if (cuenta.getSaldoDisponible().compareTo(req.monto()) < 0) {
-                log.warn("Transacción rechazada: Fondos insuficientes: saldo={} monto={}", cuenta.getSaldoDisponible(), req.monto());
-                registrarTransaccionFallida(req, cuenta.getNumeroCuenta(), IsoResponseCode.FONDOS_INSUFICIENTES);
-                return TransaccionCoreResponse.rechazada(
-                        req.rrn(), IsoResponseCode.FONDOS_INSUFICIENTES, "Fondos Insuficientes en la Cuenta",
-                        cuenta.getSaldoDisponible(), cuenta.getSaldoContable()
-                );
-            }
-
-            // Aplicar Débito
-            cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().subtract(req.monto()));
-            cuenta.setSaldoContable(cuenta.getSaldoContable().subtract(req.monto()));
-            if ("RETIRO".equalsIgnoreCase(req.tipoOperacion())) {
-                cuenta.setRetiradoHoy(cuenta.getRetiradoHoy().add(req.monto()));
-            }
-        } else if ("REVERSA".equalsIgnoreCase(req.tipoOperacion()) || "DEVOLUCION".equalsIgnoreCase(req.tipoOperacion())) {
-            // Aplicar Crédito / Reintegro
-            cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(req.monto()));
-            cuenta.setSaldoContable(cuenta.getSaldoContable().add(req.monto()));
-            if (cuenta.getRetiradoHoy().compareTo(req.monto()) >= 0) {
-                cuenta.setRetiradoHoy(cuenta.getRetiradoHoy().subtract(req.monto()));
-            }
-        }
-
-        cuentaRepository.save(cuenta);
-
-        // 6. Generar Código de Autorización y Persistir Transacción Exitosa
-        String authCode = String.valueOf(authCodeSeq.getAndIncrement());
-        TransaccionEntity tx = new TransaccionEntity(
-                req.rrn(),
-                req.stan(),
-                cuenta.getNumeroCuenta(),
-                req.monto(),
-                req.tipoOperacion(),
-                saldoInicial,
-                cuenta.getSaldoDisponible(),
-                IsoResponseCode.APROBADA,
-                authCode,
-                req.terminalId(),
-                LocalDateTime.now()
-        );
-        transaccionRepository.save(tx);
-
-        log.info("Transacción aprobada: Auth={} SaldoPosterior={}", authCode, cuenta.getSaldoDisponible());
-        return TransaccionCoreResponse.aprobada(req.rrn(), authCode, cuenta.getSaldoDisponible(), cuenta.getSaldoContable());
     }
 
-    private void registrarTransaccionFallida(TransaccionCoreRequest req, String cuenta, String codigoRespuesta) {
-        TransaccionEntity tx = new TransaccionEntity(
-                req.rrn(),
-                req.stan(),
-                cuenta != null ? cuenta : "UNKNOWN",
-                req.monto(),
-                req.tipoOperacion(),
-                BigDecimal.ZERO,
-                BigDecimal.ZERO,
-                codigoRespuesta,
-                null,
-                req.terminalId(),
-                LocalDateTime.now()
-        );
-        transaccionRepository.save(tx);
+    private TransaccionCoreResponse procesarEnTransaccion(TransaccionCoreRequest req) {
+        String tipo = req.tipoOperacion().toUpperCase(Locale.ROOT);
+        String identificador = (req.cuentaOrigen() != null && !req.cuentaOrigen().isBlank()) ? req.cuentaOrigen() : req.pan();
+        boolean esTransferencia = TRANSFERENCIA.equals(tipo);
+
+        // 1. Bloqueo pesimista de las cuentas involucradas
+        CuentaEntity cuenta;
+        CuentaEntity destino = null;
+        if (esTransferencia) {
+            // Dos cuentas: se bloquean siempre en orden ascendente de id para evitar interbloqueos
+            Optional<Long> idOrigen = resolverId(identificador);
+            Optional<Long> idDestino = resolverId(req.cuentaDestino());
+            Map<Long, CuentaEntity> bloqueadas = bloquear(Stream.of(idOrigen, idDestino)
+                    .flatMap(Optional::stream).distinct().sorted().toList());
+            cuenta = idOrigen.map(bloqueadas::get).orElse(null);
+            destino = idDestino.map(bloqueadas::get).orElse(null);
+        } else {
+            // Una cuenta: búsqueda y bloqueo en una sola consulta
+            cuenta = bloquearCuenta(identificador).orElse(null);
+        }
+
+        // 2. Idempotencia: la garantiza la restricción única (RRN, STAN). Ante un duplicado el INSERT falla,
+        //    se revierte la transacción completa y procesar() devuelve la respuesta original.
+
+        // 3. Validaciones de cuenta, tarjeta y PIN
+        if (cuenta == null) {
+            return rechazar(req, tipo, identificador, null, CUENTA_INVALIDA, "Cuenta o tarjeta no existe en el Core Bancario");
+        }
+        if (req.pan() != null && !req.pan().isBlank() && !req.pan().equals(cuenta.getPan())) {
+            return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, CUENTA_INVALIDA, "La tarjeta no corresponde a la cuenta");
+        }
+        if (BLOQUEADA.equalsIgnoreCase(cuenta.getEstado())) {
+            return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, TARJETA_BLOQUEADA, "Cuenta o tarjeta bloqueada");
+        }
+        if (VENCIDA.equalsIgnoreCase(cuenta.getEstado())) {
+            return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, TARJETA_EXPIRADA, "Tarjeta vencida");
+        }
+        boolean traePin = req.pinBlock() != null && !req.pinBlock().isBlank();
+        if (REQUIEREN_PIN.contains(tipo) || traePin) {
+            String rechazoPin = verificarPin(cuenta, req.pinBlock());
+            if (rechazoPin != null) {
+                String motivo = INTENTOS_PIN_EXCEDIDOS.equals(rechazoPin)
+                        ? "Intentos de PIN excedidos: tarjeta bloqueada" : "PIN incorrecto o ausente";
+                return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, rechazoPin, motivo);
+            }
+        }
+
+        // 4. Operación
+        BigDecimal monto = req.monto() != null ? req.monto() : BigDecimal.ZERO;
+        return switch (tipo) {
+            case COMPRA -> debitar(req, tipo, cuenta, monto, false);
+            case RETIRO -> debitar(req, tipo, cuenta, monto, true);
+            case CONSULTA -> aprobar(req, tipo, cuenta, null, BigDecimal.ZERO, cuenta.getSaldoDisponible());
+            case TRANSFERENCIA -> transferir(req, cuenta, destino, monto);
+            case DEVOLUCION -> acreditarContraOriginal(req, tipo, cuenta, monto, List.of(COMPRA));
+            case REVERSA -> acreditarContraOriginal(req, tipo, cuenta, monto, List.of(COMPRA, RETIRO));
+            default -> rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, TRANSACCION_INVALIDA,
+                    "Tipo de operación no soportado: " + tipo);
+        };
     }
 
+    private TransaccionCoreResponse debitar(TransaccionCoreRequest req, String tipo, CuentaEntity cuenta,
+                                            BigDecimal monto, boolean esRetiro) {
+        if (monto.signum() <= 0) {
+            return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, MONTO_INVALIDO, "El monto debe ser mayor que cero");
+        }
+        if (esRetiro) {
+            LocalDate hoy = LocalDate.now();
+            if (!hoy.equals(cuenta.getFechaUltimoRetiro())) {
+                // Nuevo día: el acumulado de retiros vuelve a cero
+                cuenta.setRetiradoHoy(BigDecimal.ZERO);
+                cuenta.setFechaUltimoRetiro(hoy);
+            }
+            if (cuenta.getRetiradoHoy().add(monto).compareTo(cuenta.getLimiteDiario()) > 0) {
+                return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, LIMITE_EXCEDIDO, "Supera el límite diario de retiros");
+            }
+        }
+        if (cuenta.getSaldoDisponible().compareTo(monto) < 0) {
+            return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, FONDOS_INSUFICIENTES, "Fondos insuficientes");
+        }
+        BigDecimal saldoAnterior = cuenta.getSaldoDisponible();
+        cuenta.aplicarMovimiento(monto.negate());
+        if (esRetiro) {
+            cuenta.setRetiradoHoy(cuenta.getRetiradoHoy().add(monto));
+        }
+        return aprobar(req, tipo, cuenta, null, monto, saldoAnterior);
+    }
+
+    private TransaccionCoreResponse transferir(TransaccionCoreRequest req, CuentaEntity origen, CuentaEntity destino,
+                                               BigDecimal monto) {
+        if (monto.signum() <= 0) {
+            return rechazar(req, TRANSFERENCIA, origen.getNumeroCuenta(), origen, MONTO_INVALIDO, "El monto debe ser mayor que cero");
+        }
+        if (destino == null || !ACTIVA.equalsIgnoreCase(destino.getEstado())) {
+            return rechazar(req, TRANSFERENCIA, origen.getNumeroCuenta(), origen, CUENTA_INVALIDA, "Cuenta destino inexistente o inactiva");
+        }
+        if (destino.getId().equals(origen.getId())) {
+            return rechazar(req, TRANSFERENCIA, origen.getNumeroCuenta(), origen, TRANSACCION_INVALIDA, "La cuenta destino es la misma cuenta origen");
+        }
+        if (origen.getSaldoDisponible().compareTo(monto) < 0) {
+            return rechazar(req, TRANSFERENCIA, origen.getNumeroCuenta(), origen, FONDOS_INSUFICIENTES, "Fondos insuficientes");
+        }
+        BigDecimal saldoAnterior = origen.getSaldoDisponible();
+        origen.aplicarMovimiento(monto.negate());
+        destino.aplicarMovimiento(monto);
+        return aprobar(req, TRANSFERENCIA, origen, destino.getNumeroCuenta(), monto, saldoAnterior);
+    }
+
+    /**
+     * Reversa (0420) o devolución: acredita contra una transacción original aprobada con el mismo RRN,
+     * sin superar el monto pendiente de esa transacción.
+     */
+    private TransaccionCoreResponse acreditarContraOriginal(TransaccionCoreRequest req, String tipo, CuentaEntity cuenta,
+                                                           BigDecimal monto, List<String> tiposOriginales) {
+        List<TransaccionEntity> originales =
+                transaccionRepository.buscarOriginalesAprobadas(req.rrn(), cuenta.getNumeroCuenta(), tiposOriginales);
+        if (originales.isEmpty()) {
+            return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, ORIGINAL_NO_ENCONTRADA,
+                    "No existe una transacción original aprobada con RRN " + req.rrn());
+        }
+        TransaccionEntity original = originales.getFirst();
+        BigDecimal yaAplicado = transaccionRepository.sumarAprobadas(req.rrn(), cuenta.getNumeroCuenta(), tipo);
+        BigDecimal pendiente = original.getMonto().subtract(yaAplicado);
+        BigDecimal aAcreditar = monto.signum() > 0 ? monto : pendiente;
+        if (aAcreditar.signum() <= 0 || aAcreditar.compareTo(pendiente) > 0) {
+            return rechazar(req, tipo, cuenta.getNumeroCuenta(), cuenta, MONTO_INVALIDO,
+                    "El monto excede lo pendiente de la transacción original (" + pendiente + ")");
+        }
+        BigDecimal saldoAnterior = cuenta.getSaldoDisponible();
+        cuenta.aplicarMovimiento(aAcreditar);
+        if (REVERSA.equals(tipo) && RETIRO.equals(original.getTipoOperacion())
+                && LocalDate.now().equals(cuenta.getFechaUltimoRetiro())) {
+            cuenta.setRetiradoHoy(cuenta.getRetiradoHoy().subtract(aAcreditar).max(BigDecimal.ZERO));
+        }
+        return aprobar(req, tipo, cuenta, null, aAcreditar, saldoAnterior);
+    }
+
+    /** @return null si el PIN es correcto; 55 si es incorrecto o falta; 75 si se excedieron los intentos. */
+    private String verificarPin(CuentaEntity cuenta, String pinBlock) {
+        if (pinBlock == null || pinBlock.isBlank()) {
+            return PIN_INCORRECTO;
+        }
+        boolean correcto = PinBlock.extraerPin(pinBlock, cuenta.getPan())
+                .map(pin -> PinHasher.coincide(cuenta.getNumeroCuenta(), pin, cuenta.getPinHash()))
+                .orElse(false);
+        if (correcto) {
+            if (cuenta.getIntentosPinFallidos() != 0) {
+                cuenta.setIntentosPinFallidos(0);
+            }
+            return null;
+        }
+        int intentos = cuenta.getIntentosPinFallidos() + 1;
+        cuenta.setIntentosPinFallidos(intentos);
+        if (intentos >= MAX_INTENTOS_PIN) {
+            cuenta.setEstado(BLOQUEADA);
+            log.warn("Tarjeta de la cuenta {} bloqueada por {} intentos de PIN fallidos", cuenta.getNumeroCuenta(), intentos);
+            return INTENTOS_PIN_EXCEDIDOS;
+        }
+        return PIN_INCORRECTO;
+    }
+
+    private TransaccionCoreResponse aprobar(TransaccionCoreRequest req, String tipo, CuentaEntity cuenta,
+                                            String cuentaDestino, BigDecimal monto, BigDecimal saldoAnterior) {
+        String autorizacion = siguienteAutorizacion();
+        transaccionRepository.saveAndFlush(new TransaccionEntity(
+                req.rrn(), req.stan(), cuenta.getNumeroCuenta(), cuentaDestino, monto, tipo,
+                saldoAnterior, cuenta.getSaldoDisponible(), APROBADA, autorizacion,
+                req.terminalId(), LocalDateTime.now()));
+        log.debug("Aprobada {} RRN={} STAN={} Auth={} Saldo={}", tipo, req.rrn(), req.stan(), autorizacion, cuenta.getSaldoDisponible());
+        return TransaccionCoreResponse.aprobada(req.rrn(), autorizacion, cuenta.getSaldoDisponible(), cuenta.getSaldoContable());
+    }
+
+    private TransaccionCoreResponse rechazar(TransaccionCoreRequest req, String tipo, String numeroCuenta,
+                                             CuentaEntity cuenta, String codigo, String motivo) {
+        BigDecimal saldo = cuenta != null ? cuenta.getSaldoDisponible() : BigDecimal.ZERO;
+        BigDecimal saldoContable = cuenta != null ? cuenta.getSaldoContable() : BigDecimal.ZERO;
+        transaccionRepository.saveAndFlush(new TransaccionEntity(
+                req.rrn(), req.stan(), recortar(numeroCuenta != null ? numeroCuenta : "DESCONOCIDA", 30),
+                recortar(req.cuentaDestino(), 30), req.monto() != null ? req.monto() : BigDecimal.ZERO,
+                recortar(tipo, 20), saldo, saldo, codigo, null, recortar(req.terminalId(), 30), LocalDateTime.now()));
+        log.info("Rechazada {} RRN={} STAN={} DE39={}: {}", tipo, req.rrn(), req.stan(), codigo, motivo);
+        return TransaccionCoreResponse.rechazada(req.rrn(), codigo, motivo, saldo, saldoContable);
+    }
+
+    private TransaccionCoreResponse respuestaIdempotente(TransaccionEntity te) {
+        return new TransaccionCoreResponse(
+                APROBADA.equals(te.getCodigoRespuesta()),
+                te.getCodigoRespuesta(),
+                te.getCodigoAutorizacion(),
+                te.getSaldoPosterior(),
+                te.getSaldoPosterior(),
+                "Transacción previa recuperada por Idempotencia",
+                te.getRrn(),
+                te.getFechaHora().toString()
+        );
+    }
+
+    /**
+     * Código de autorización (DE 38) de 6 dígitos. La secuencia continúa desde el último código
+     * guardado en la BD, por lo que no se repite tras reiniciar la aplicación.
+     */
+    private String siguienteAutorizacion() {
+        if (secuenciaAutorizacion.get() < 0) {
+            lockSecuencia.lock();
+            try {
+                if (secuenciaAutorizacion.get() < 0) {
+                    String ultimo = transaccionRepository.ultimoCodigoAutorizacion();
+                    long base = (ultimo != null && ultimo.matches("\\d{6}")) ? Long.parseLong(ultimo) : 100000L;
+                    secuenciaAutorizacion.set(base);
+                }
+            } finally {
+                lockSecuencia.unlock();
+            }
+        }
+        long siguiente = secuenciaAutorizacion.incrementAndGet();
+        return String.valueOf(100000 + Math.floorMod(siguiente - 100000, 900000));
+    }
+
+    private Optional<Long> resolverId(String identificador) {
+        if (identificador == null || identificador.isBlank()) {
+            return Optional.empty();
+        }
+        return cuentaRepository.buscarIdPorNumero(identificador)
+                .or(() -> cuentaRepository.buscarIdsPorPan(identificador).stream().findFirst());
+    }
+
+    private Map<Long, CuentaEntity> bloquear(List<Long> idsOrdenados) {
+        return idsOrdenados.stream()
+                .map(cuentaRepository::bloquearPorId)
+                .flatMap(Optional::stream)
+                .collect(Collectors.toMap(CuentaEntity::getId, Function.identity()));
+    }
+
+    private static String recortar(String valor, int maximo) {
+        return valor == null || valor.length() <= maximo ? valor : valor.substring(0, maximo);
+    }
+
+    // =====================================================================================
+    // Administración de cuentas
+    // =====================================================================================
+
+    @Transactional(readOnly = true)
     public List<CuentaDto> listarCuentas() {
-        return cuentaRepository.findAll().stream()
-                .map(c -> new CuentaDto(
-                        c.getNumeroCuenta(), c.getTitular(), c.getPan(),
-                        c.getSaldoDisponible(), c.getSaldoContable(),
-                        c.getLimiteDiario(), c.getRetiradoHoy(), c.getEstado(),
-                        c.getPin(), c.getBanco()
-                )).toList();
+        return cuentaRepository.findAll(Sort.by("id")).stream().map(CoreBancarioService::toDto).toList();
     }
 
+    @Transactional(readOnly = true)
     public Optional<CuentaDto> obtenerCuenta(String id) {
-        return cuentaRepository.findByNumeroCuentaOrPan(id, id)
-                .map(c -> new CuentaDto(
-                        c.getNumeroCuenta(), c.getTitular(), c.getPan(),
-                        c.getSaldoDisponible(), c.getSaldoContable(),
-                        c.getLimiteDiario(), c.getRetiradoHoy(), c.getEstado(),
-                        c.getPin(), c.getBanco()
-                ));
+        return buscarCuenta(id).map(CoreBancarioService::toDto);
     }
 
-    public List<TransaccionEntity> listarTransacciones() {
-        return transaccionRepository.findAll();
+    @Transactional(readOnly = true)
+    public List<TransaccionEntity> listarTransacciones(int limite) {
+        return transaccionRepository.buscarRecientes(PageRequest.of(0, acotar(limite)));
+    }
+
+    @Transactional(readOnly = true)
+    public Optional<List<TransaccionEntity>> transaccionesDeCuenta(String id, int limite) {
+        return buscarCuenta(id).map(c -> transaccionRepository.buscarPorCuenta(c.getNumeroCuenta(), PageRequest.of(0, acotar(limite))));
     }
 
     @Transactional
     public Optional<CuentaDto> recargarSaldo(String id, BigDecimal monto) {
-        return cuentaRepository.findByNumeroCuentaOrPan(id, id).map(cuenta -> {
-            cuenta.setSaldoDisponible(cuenta.getSaldoDisponible().add(monto));
-            cuenta.setSaldoContable(cuenta.getSaldoContable().add(monto));
-            cuentaRepository.save(cuenta);
-            log.info("Recarga aplicada a cuenta {}: +Q. {}", id, monto);
-            return new CuentaDto(
-                    cuenta.getNumeroCuenta(), cuenta.getTitular(), cuenta.getPan(),
-                    cuenta.getSaldoDisponible(), cuenta.getSaldoContable(),
-                    cuenta.getLimiteDiario(), cuenta.getRetiradoHoy(), cuenta.getEstado(),
-                    cuenta.getPin(), cuenta.getBanco()
-            );
+        if (monto == null || monto.signum() <= 0) {
+            throw new IllegalArgumentException("El monto de la recarga debe ser mayor que cero");
+        }
+        return bloquearCuenta(id).map(cuenta -> {
+            cuenta.aplicarMovimiento(monto);
+            log.info("Recarga aplicada a cuenta {}: +Q. {}", cuenta.getNumeroCuenta(), monto);
+            return toDto(cuenta);
         });
     }
 
     @Transactional
     public Optional<CuentaDto> toggleBloqueo(String id) {
-        return cuentaRepository.findByNumeroCuentaOrPan(id, id).map(cuenta -> {
-            String nuevoEstado = "BLOCKED".equalsIgnoreCase(cuenta.getEstado()) ? "ACTIVE" : "BLOCKED";
-            cuenta.setEstado(nuevoEstado);
-            cuentaRepository.save(cuenta);
-            log.info("Estado de cuenta {} cambiado a {}", id, nuevoEstado);
-            return new CuentaDto(
-                    cuenta.getNumeroCuenta(), cuenta.getTitular(), cuenta.getPan(),
-                    cuenta.getSaldoDisponible(), cuenta.getSaldoContable(),
-                    cuenta.getLimiteDiario(), cuenta.getRetiradoHoy(), cuenta.getEstado(),
-                    cuenta.getPin(), cuenta.getBanco()
-            );
+        return bloquearCuenta(id).map(cuenta -> {
+            boolean desbloquear = BLOQUEADA.equalsIgnoreCase(cuenta.getEstado());
+            cuenta.setEstado(desbloquear ? ACTIVA : BLOQUEADA);
+            if (desbloquear) {
+                cuenta.setIntentosPinFallidos(0);
+            }
+            log.info("Estado de cuenta {} cambiado a {}", cuenta.getNumeroCuenta(), cuenta.getEstado());
+            return toDto(cuenta);
         });
     }
 
     @Transactional
-    public CuentaDto crearCuenta(com.banco.recolector.corebancario.CrearCuentaRequest req) {
-        String titular = (req.titular() != null && !req.titular().isBlank()) ? req.titular().trim().toUpperCase() : "CLIENTE GUATEMALA";
-        
-        String numeroCuenta = (req.numeroCuenta() != null && !req.numeroCuenta().isBlank()) 
-                ? req.numeroCuenta().trim() 
-                : String.format("1001-2002-%04d", (int)(Math.random() * 9000) + 1000);
-
-        String pan = (req.pan() != null && !req.pan().isBlank())
-                ? req.pan().replaceAll("\\s+", "")
-                : String.format("4532%012d", (long)(Math.random() * 900000000000L) + 100000000000L);
-
+    public CuentaDto crearCuenta(CrearCuentaRequest req) {
+        String titular = textoONulo(req.titular()) != null ? req.titular().trim().toUpperCase(Locale.ROOT) : "CLIENTE GUATEMALA";
+        String numeroCuenta = textoONulo(req.numeroCuenta()) != null ? req.numeroCuenta().trim() : generarNumeroCuenta();
+        String pan = textoONulo(req.pan()) != null ? req.pan().trim() : generarPan();
         BigDecimal saldo = req.saldoInicial() != null ? req.saldoInicial() : new BigDecimal("1000.00");
         BigDecimal limite = req.limiteDiario() != null ? req.limiteDiario() : new BigDecimal("500.00");
-        String estado = (req.estado() != null && !req.estado().isBlank()) ? req.estado().toUpperCase() : "ACTIVE";
-        String pin = (req.pin() != null && !req.pin().isBlank()) ? req.pin().trim() : "1234";
-        String banco = (req.banco() != null && !req.banco().isBlank()) ? req.banco().trim().toUpperCase() : "BANCO INDUSTRIAL";
+        String estado = textoONulo(req.estado()) != null ? req.estado().toUpperCase(Locale.ROOT) : ACTIVA;
+        String pin = textoONulo(req.pin()) != null ? req.pin() : "1234";
+        String banco = textoONulo(req.banco()) != null ? req.banco().trim().toUpperCase(Locale.ROOT) : "BANCO INDUSTRIAL";
 
-        if (cuentaRepository.findByNumeroCuenta(numeroCuenta).isPresent()) {
+        if (cuentaRepository.existsByNumeroCuenta(numeroCuenta)) {
             throw new IllegalArgumentException("Ya existe una cuenta con el número: " + numeroCuenta);
         }
-        if (cuentaRepository.findByPan(pan).isPresent()) {
+        if (cuentaRepository.existsByPan(pan)) {
             throw new IllegalArgumentException("Ya existe una tarjeta con el PAN: " + pan);
         }
 
-        CuentaEntity entity = new CuentaEntity(
-                numeroCuenta, pan, titular, saldo, saldo, limite, BigDecimal.ZERO, estado, pin, banco
-        );
-        cuentaRepository.save(entity);
-        log.info("Nueva cuenta bancaria creada: {} Titular: {} PAN: {} Banco: {}", numeroCuenta, titular, pan, banco);
-
-        return new CuentaDto(
-                entity.getNumeroCuenta(), entity.getTitular(), entity.getPan(),
-                entity.getSaldoDisponible(), entity.getSaldoContable(),
-                entity.getLimiteDiario(), entity.getRetiradoHoy(), entity.getEstado(),
-                entity.getPin(), entity.getBanco()
-        );
+        CuentaEntity entity = cuentaRepository.save(new CuentaEntity(
+                numeroCuenta, pan, titular, saldo, limite, estado, PinHasher.hash(numeroCuenta, pin), banco));
+        log.info("Nueva cuenta creada: {} Titular: {} Banco: {}", numeroCuenta, titular, banco);
+        return toDto(entity);
     }
 
     @Transactional
-    public Optional<CuentaDto> editarCuenta(String id, com.banco.recolector.corebancario.EditarCuentaRequest req) {
-        return cuentaRepository.findByNumeroCuentaOrPan(id, id).map(c -> {
-            if (req.titular() != null && !req.titular().isBlank()) {
-                c.setTitular(req.titular().trim().toUpperCase());
+    public Optional<CuentaDto> editarCuenta(String id, EditarCuentaRequest req) {
+        return bloquearCuenta(id).map(c -> {
+            if (textoONulo(req.titular()) != null) {
+                c.setTitular(req.titular().trim().toUpperCase(Locale.ROOT));
             }
             if (req.limiteDiario() != null) {
                 c.setLimiteDiario(req.limiteDiario());
@@ -313,45 +418,87 @@ public class CoreBancarioService {
                 c.setSaldoDisponible(req.saldoDisponible());
                 c.setSaldoContable(req.saldoDisponible());
             }
-            if (req.estado() != null && !req.estado().isBlank()) {
-                c.setEstado(req.estado().toUpperCase());
+            if (textoONulo(req.estado()) != null) {
+                c.setEstado(req.estado().toUpperCase(Locale.ROOT));
+                if (ACTIVA.equals(c.getEstado())) {
+                    c.setIntentosPinFallidos(0);
+                }
             }
-            if (req.pin() != null && !req.pin().isBlank()) {
-                c.setPin(req.pin().trim());
+            if (textoONulo(req.pin()) != null) {
+                c.setPinHash(PinHasher.hash(c.getNumeroCuenta(), req.pin()));
+                c.setIntentosPinFallidos(0);
             }
-            if (req.banco() != null && !req.banco().isBlank()) {
-                c.setBanco(req.banco().trim().toUpperCase());
+            if (textoONulo(req.banco()) != null) {
+                c.setBanco(req.banco().trim().toUpperCase(Locale.ROOT));
             }
-            cuentaRepository.save(c);
-            log.info("Cuenta {} editada con éxito.", id);
-            return new CuentaDto(
-                    c.getNumeroCuenta(), c.getTitular(), c.getPan(),
-                    c.getSaldoDisponible(), c.getSaldoContable(),
-                    c.getLimiteDiario(), c.getRetiradoHoy(), c.getEstado(),
-                    c.getPin(), c.getBanco()
-            );
+            log.info("Cuenta {} editada con éxito.", c.getNumeroCuenta());
+            return toDto(c);
         });
     }
 
     @Transactional
     public boolean eliminarCuenta(String id) {
-        Optional<CuentaEntity> opt = cuentaRepository.findByNumeroCuentaOrPan(id, id);
-        if (opt.isPresent()) {
-            cuentaRepository.delete(opt.get());
-            log.info("Cuenta {} eliminada del Core Bancario.", id);
+        return bloquearCuenta(id).map(cuenta -> {
+            cuentaRepository.delete(cuenta);
+            log.info("Cuenta {} eliminada del Core Bancario.", cuenta.getNumeroCuenta());
             return true;
-        }
-        return false;
+        }).orElse(false);
     }
 
+    /** Restablece el entorno de demostración: vacía transacciones y reinicia acumulados e intentos de PIN. */
     @Transactional
     public void resetCuentas() {
-        transaccionRepository.deleteAll();
-        List<CuentaEntity> cuentas = cuentaRepository.findAll();
-        for (CuentaEntity c : cuentas) {
+        transaccionRepository.deleteAllInBatch();
+        for (CuentaEntity c : cuentaRepository.findAll()) {
             c.setRetiradoHoy(BigDecimal.ZERO);
-            cuentaRepository.save(c);
+            c.setFechaUltimoRetiro(null);
+            c.setIntentosPinFallidos(0);
         }
-        log.info("Reset completado en SQL Server: acumulados de retiro diario restablecidos a 0 y transacciones vaciadas.");
+        log.info("Reset completado: transacciones vaciadas y acumulados diarios reiniciados.");
+    }
+
+    private Optional<CuentaEntity> buscarCuenta(String id) {
+        return resolverId(id).flatMap(cuentaRepository::findById);
+    }
+
+    /** Busca y bloquea la cuenta por número (una sola consulta) o, si no existe, por PAN. */
+    private Optional<CuentaEntity> bloquearCuenta(String id) {
+        if (id == null || id.isBlank()) {
+            return Optional.empty();
+        }
+        return cuentaRepository.bloquearPorNumero(id)
+                .or(() -> cuentaRepository.buscarIdsPorPan(id).stream().findFirst().flatMap(cuentaRepository::bloquearPorId));
+    }
+
+    private String generarNumeroCuenta() {
+        String numero;
+        do {
+            numero = String.format("1001-2002-%04d", ThreadLocalRandom.current().nextInt(1000, 10000));
+        } while (cuentaRepository.existsByNumeroCuenta(numero));
+        return numero;
+    }
+
+    private String generarPan() {
+        String pan;
+        do {
+            pan = "4532" + String.format("%012d", ThreadLocalRandom.current().nextLong(100_000_000_000L, 1_000_000_000_000L));
+        } while (cuentaRepository.existsByPan(pan));
+        return pan;
+    }
+
+    private static int acotar(int limite) {
+        return Math.clamp(limite, 1, MAX_LISTADO);
+    }
+
+    private static String textoONulo(String valor) {
+        return valor == null || valor.isBlank() ? null : valor;
+    }
+
+    static CuentaDto toDto(CuentaEntity c) {
+        BigDecimal retiradoHoy = LocalDate.now().equals(c.getFechaUltimoRetiro()) ? c.getRetiradoHoy() : BigDecimal.ZERO;
+        return new CuentaDto(
+                c.getNumeroCuenta(), c.getTitular(), c.getPan(),
+                c.getSaldoDisponible(), c.getSaldoContable(),
+                c.getLimiteDiario(), retiradoHoy, c.getEstado(), c.getBanco());
     }
 }

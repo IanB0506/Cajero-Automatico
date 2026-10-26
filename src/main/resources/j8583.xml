@@ -1,17 +1,22 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE j8583-config PUBLIC "-//j8583//DTD CONFIG//EN" "http://j8583.sourceforge.net/j8583.dtd">
+<!--
+  Guías de parseo ISO 8583:1987 (ASCII, bitmap hexadecimal).
+  Cada respuesta declara todos los campos que puede devolver: IsoMessageService elimina de la
+  respuesta cualquier campo que no esté en su guía, de modo que el cliente siempre puede parsearla.
+-->
 <j8583-config>
   <!-- Headers para compatibilidad con conmutadores ISO 8583 -->
-  <header type="0200">ISO015000050</header>
-  <header type="0210">ISO015000050</header>
   <header type="0100">ISO015000050</header>
   <header type="0110">ISO015000050</header>
+  <header type="0200">ISO015000050</header>
+  <header type="0210">ISO015000050</header>
   <header type="0420">ISO015000050</header>
   <header type="0430">ISO015000050</header>
   <header type="0800">ISO015000050</header>
   <header type="0810">ISO015000050</header>
 
-  <!-- MTI 0200: Solicitud de Transacción Financiera (Compra / Retiro) -->
+  <!-- MTI 0200: Solicitud Financiera (Compra 00, Retiro 01, Devolución 20, Consulta 30, Transferencia 40) -->
   <parse type="0200">
     <field num="2" type="LLVAR"/>
     <field num="3" type="NUMERIC" length="6"/>
@@ -27,10 +32,12 @@
     <field num="41" type="ALPHA" length="8"/>
     <field num="42" type="ALPHA" length="15"/>
     <field num="49" type="NUMERIC" length="3"/>
+    <field num="52" type="ALPHA" length="16"/>
     <field num="102" type="LLVAR"/>
+    <field num="103" type="LLVAR"/>
   </parse>
 
-  <!-- MTI 0210: Respuesta de Transacción Financiera (Aprobación / Rechazo con DE 39) -->
+  <!-- MTI 0210: Respuesta Financiera (DE 38 autorización, DE 39 código de respuesta, DE 54 saldos) -->
   <parse type="0210">
     <field num="2" type="LLVAR"/>
     <field num="3" type="NUMERIC" length="6"/>
@@ -43,65 +50,86 @@
     <field num="38" type="ALPHA" length="6"/>
     <field num="39" type="ALPHA" length="2"/>
     <field num="41" type="ALPHA" length="8"/>
+    <field num="42" type="ALPHA" length="15"/>
     <field num="49" type="NUMERIC" length="3"/>
     <field num="54" type="LLLVAR"/>
     <field num="102" type="LLVAR"/>
+    <field num="103" type="LLVAR"/>
   </parse>
 
   <!-- MTI 0100: Solicitud de Autorización / Consulta de Saldo -->
   <parse type="0100">
     <field num="2" type="LLVAR"/>
     <field num="3" type="NUMERIC" length="6"/>
+    <field num="4" type="AMOUNT"/>
     <field num="7" type="DATE10"/>
     <field num="11" type="NUMERIC" length="6"/>
     <field num="12" type="TIME"/>
     <field num="13" type="DATE4"/>
     <field num="37" type="ALPHA" length="12"/>
     <field num="41" type="ALPHA" length="8"/>
+    <field num="42" type="ALPHA" length="15"/>
+    <field num="49" type="NUMERIC" length="3"/>
+    <field num="52" type="ALPHA" length="16"/>
     <field num="102" type="LLVAR"/>
   </parse>
 
-  <!-- MTI 0110: Respuesta de Consulta de Saldo (Retorno de Balance en DE 54) -->
+  <!-- MTI 0110: Respuesta de Autorización / Consulta (saldos en DE 54) -->
   <parse type="0110">
     <field num="2" type="LLVAR"/>
     <field num="3" type="NUMERIC" length="6"/>
+    <field num="4" type="AMOUNT"/>
     <field num="7" type="DATE10"/>
     <field num="11" type="NUMERIC" length="6"/>
+    <field num="12" type="TIME"/>
+    <field num="13" type="DATE4"/>
     <field num="37" type="ALPHA" length="12"/>
     <field num="38" type="ALPHA" length="6"/>
     <field num="39" type="ALPHA" length="2"/>
     <field num="41" type="ALPHA" length="8"/>
+    <field num="42" type="ALPHA" length="15"/>
+    <field num="49" type="NUMERIC" length="3"/>
     <field num="54" type="LLLVAR"/>
     <field num="102" type="LLVAR"/>
   </parse>
 
-  <!-- MTI 0420: Solicitud de Reversa Financiera (Fallo de Dispensador / Impresora) -->
+  <!-- MTI 0420: Reversa (DE 37 = RRN de la transacción original, DE 11 = STAN propio de la reversa) -->
   <parse type="0420">
     <field num="2" type="LLVAR"/>
     <field num="3" type="NUMERIC" length="6"/>
     <field num="4" type="AMOUNT"/>
     <field num="7" type="DATE10"/>
     <field num="11" type="NUMERIC" length="6"/>
+    <field num="12" type="TIME"/>
+    <field num="13" type="DATE4"/>
     <field num="37" type="ALPHA" length="12"/>
     <field num="41" type="ALPHA" length="8"/>
+    <field num="42" type="ALPHA" length="15"/>
+    <field num="49" type="NUMERIC" length="3"/>
     <field num="90" type="ALPHA" length="42"/>
     <field num="102" type="LLVAR"/>
   </parse>
 
-  <!-- MTI 0430: Respuesta de Reversa Financiera Confirmada -->
+  <!-- MTI 0430: Respuesta de Reversa -->
   <parse type="0430">
     <field num="2" type="LLVAR"/>
     <field num="3" type="NUMERIC" length="6"/>
     <field num="4" type="AMOUNT"/>
     <field num="7" type="DATE10"/>
     <field num="11" type="NUMERIC" length="6"/>
+    <field num="12" type="TIME"/>
+    <field num="13" type="DATE4"/>
     <field num="37" type="ALPHA" length="12"/>
     <field num="39" type="ALPHA" length="2"/>
     <field num="41" type="ALPHA" length="8"/>
+    <field num="42" type="ALPHA" length="15"/>
+    <field num="49" type="NUMERIC" length="3"/>
+    <field num="54" type="LLLVAR"/>
+    <field num="90" type="ALPHA" length="42"/>
     <field num="102" type="LLVAR"/>
   </parse>
 
-  <!-- MTI 0800: Diagnóstico de Red / Echo Test (DE 70 = 301) -->
+  <!-- MTI 0800: Gestión de Red / Echo Test (DE 70 = 301) -->
   <parse type="0800">
     <field num="7" type="DATE10"/>
     <field num="11" type="NUMERIC" length="6"/>
@@ -110,7 +138,7 @@
     <field num="70" type="NUMERIC" length="3"/>
   </parse>
 
-  <!-- MTI 0810: Respuesta de Diagnóstico de Red (Echo Test Response) -->
+  <!-- MTI 0810: Respuesta de Gestión de Red -->
   <parse type="0810">
     <field num="7" type="DATE10"/>
     <field num="11" type="NUMERIC" length="6"/>

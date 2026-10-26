@@ -1,10 +1,13 @@
 package com.banco.recolector.corebancario.entity;
 
 import jakarta.persistence.*;
+
 import java.math.BigDecimal;
+import java.time.LocalDate;
 
 /**
  * Entidad JPA que representa la tabla de Cuentas del Core Bancario.
+ * El PIN nunca se almacena en claro: solo su hash SHA-256 (ver {@code PinHasher}).
  */
 @Entity
 @Table(name = "cuentas", indexes = {
@@ -38,46 +41,40 @@ public class CuentaEntity {
     @Column(nullable = false, precision = 15, scale = 2)
     private BigDecimal retiradoHoy;
 
+    /** Día al que corresponde {@link #retiradoHoy}; al cambiar el día el acumulado vuelve a cero. */
+    private LocalDate fechaUltimoRetiro;
+
     @Column(nullable = false, length = 20)
     private String estado; // ACTIVE, BLOCKED, EXPIRED
 
-    @Column(nullable = false, length = 10)
-    private String pin = "1234";
+    @Column(length = 64)
+    private String pinHash;
+
+    @Column(nullable = false)
+    private int intentosPinFallidos;
 
     @Column(length = 60)
-    private String banco = "BANCO INDUSTRIAL";
+    private String banco;
 
-    public CuentaEntity() {}
+    protected CuentaEntity() {}
 
-    public CuentaEntity(String numeroCuenta, String pan, String titular, BigDecimal saldoDisponible,
-                        BigDecimal saldoContable, BigDecimal limiteDiario, BigDecimal retiradoHoy, String estado, String pin, String banco) {
+    public CuentaEntity(String numeroCuenta, String pan, String titular, BigDecimal saldo,
+                        BigDecimal limiteDiario, String estado, String pinHash, String banco) {
         this.numeroCuenta = numeroCuenta;
         this.pan = pan;
         this.titular = titular;
-        this.saldoDisponible = saldoDisponible;
-        this.saldoContable = saldoContable;
+        this.saldoDisponible = saldo;
+        this.saldoContable = saldo;
         this.limiteDiario = limiteDiario;
-        this.retiradoHoy = retiradoHoy;
+        this.retiradoHoy = BigDecimal.ZERO;
         this.estado = estado;
-        this.pin = (pin != null && !pin.isBlank()) ? pin : "1234";
-        this.banco = (banco != null && !banco.isBlank()) ? banco : "BANCO INDUSTRIAL";
-    }
-
-    public CuentaEntity(String numeroCuenta, String pan, String titular, BigDecimal saldoDisponible,
-                        BigDecimal saldoContable, BigDecimal limiteDiario, BigDecimal retiradoHoy, String estado, String pin) {
-        this(numeroCuenta, pan, titular, saldoDisponible, saldoContable, limiteDiario, retiradoHoy, estado, pin, "BANCO INDUSTRIAL");
-    }
-
-    public CuentaEntity(String numeroCuenta, String pan, String titular, BigDecimal saldoDisponible,
-                        BigDecimal saldoContable, BigDecimal limiteDiario, BigDecimal retiradoHoy, String estado) {
-        this(numeroCuenta, pan, titular, saldoDisponible, saldoContable, limiteDiario, retiradoHoy, estado, "1234", "BANCO INDUSTRIAL");
+        this.pinHash = pinHash;
+        this.banco = banco;
     }
 
     public Long getId() { return id; }
     public String getNumeroCuenta() { return numeroCuenta; }
-    public void setNumeroCuenta(String numeroCuenta) { this.numeroCuenta = numeroCuenta; }
     public String getPan() { return pan; }
-    public void setPan(String pan) { this.pan = pan; }
     public String getTitular() { return titular; }
     public void setTitular(String titular) { this.titular = titular; }
     public BigDecimal getSaldoDisponible() { return saldoDisponible; }
@@ -88,10 +85,20 @@ public class CuentaEntity {
     public void setLimiteDiario(BigDecimal limiteDiario) { this.limiteDiario = limiteDiario; }
     public BigDecimal getRetiradoHoy() { return retiradoHoy; }
     public void setRetiradoHoy(BigDecimal retiradoHoy) { this.retiradoHoy = retiradoHoy; }
+    public LocalDate getFechaUltimoRetiro() { return fechaUltimoRetiro; }
+    public void setFechaUltimoRetiro(LocalDate fechaUltimoRetiro) { this.fechaUltimoRetiro = fechaUltimoRetiro; }
     public String getEstado() { return estado; }
     public void setEstado(String estado) { this.estado = estado; }
-    public String getPin() { return pin != null ? pin : "1234"; }
-    public void setPin(String pin) { this.pin = (pin != null && !pin.isBlank()) ? pin : "1234"; }
+    public String getPinHash() { return pinHash; }
+    public void setPinHash(String pinHash) { this.pinHash = pinHash; }
+    public int getIntentosPinFallidos() { return intentosPinFallidos; }
+    public void setIntentosPinFallidos(int intentosPinFallidos) { this.intentosPinFallidos = intentosPinFallidos; }
     public String getBanco() { return (banco != null && !banco.isBlank()) ? banco : "BANCO INDUSTRIAL"; }
     public void setBanco(String banco) { this.banco = banco; }
+
+    /** Acredita o debita (monto negativo) el saldo disponible y contable. */
+    public void aplicarMovimiento(BigDecimal monto) {
+        this.saldoDisponible = this.saldoDisponible.add(monto);
+        this.saldoContable = this.saldoContable.add(monto);
+    }
 }

@@ -5,7 +5,8 @@ import java.math.BigDecimal;
 /**
  * DTO Inmutable (Java Record) que representa una transacción ISO 8583 normalizada.
  * Contiene los Data Elements críticos extraídos de forma segura:
- * DE 2 (PAN), DE 3 (ProcCode), DE 4 (Monto), DE 11 (STAN), DE 37 (RRN), DE 102 (Cuenta).
+ * DE 2 (PAN), DE 3 (ProcCode), DE 4 (Monto), DE 11 (STAN), DE 37 (RRN), DE 49 (Moneda),
+ * DE 52 (PIN Block), DE 102 (Cuenta Origen) y DE 103 (Cuenta Destino).
  */
 public record IsoTransactionDto(
     String mti,
@@ -17,6 +18,9 @@ public record IsoTransactionDto(
     String terminalId,
     String merchantId,
     String cuenta,
+    String cuentaDestino,
+    String moneda,
+    String pinBlock,
     String responseCode,
     String authCode
 ) {
@@ -34,5 +38,14 @@ public record IsoTransactionDto(
      */
     public String claveIdempotencia() {
         return (rrn != null ? rrn : "") + ":" + (stan != null ? stan : "");
+    }
+
+    /**
+     * Representación segura para logs: nunca incluye el PIN block ni el PAN completo.
+     */
+    @Override
+    public String toString() {
+        return "IsoTransactionDto[mti=%s, pan=%s, procCode=%s, monto=%s, stan=%s, rrn=%s, cuenta=%s]"
+                .formatted(mti, panEnmascarado(), processingCode, amount, stan, rrn, cuenta);
     }
 }

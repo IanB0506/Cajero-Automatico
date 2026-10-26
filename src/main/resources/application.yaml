@@ -5,45 +5,66 @@ spring:
     virtual:
       enabled: true
   datasource:
-    url: jdbc:sqlserver://127.0.0.1:1434;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;
+    # sendStringParametersAsUnicode=false: parámetros VARCHAR (búsqueda por índice, no recorrido completo)
+    url: jdbc:sqlserver://127.0.0.1:1434;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;sendStringParametersAsUnicode=false;
     driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
     username: sa
     password: admin
     hikari:
-      maximum-pool-size: 1
-      minimum-idle: 1
+      # El bloqueo pesimista por cuenta permite procesar transacciones en paralelo de forma segura
+      maximum-pool-size: 20
+      # No abre conexiones al arrancar: arranque inmediato y tolerancia a una BD que aún no está lista
+      initialization-fail-timeout: -1
   jpa:
+    open-in-view: false
     database-platform: org.hibernate.dialect.SQLServerDialect
     hibernate:
-      ddl-auto: update
-    show-sql: false
+      # El esquema lo crea y migra init_sqlserver.sql; Hibernate no lo modifica
+      ddl-auto: none
     properties:
-      hibernate:
-        format_sql: false
+      # Sin consultas de metadatos JDBC al arrancar (SQL Server 2022 = versión 16)
+      hibernate.boot.allow_jdbc_metadata_access: false
+      jakarta.persistence.database-product-name: Microsoft SQL Server
+      jakarta.persistence.database-major-version: 16
 
 server:
-  port: 8080
+  port: 8087
 
 management:
+  observations:
+    enable:
+      # Sin trazas de observabilidad por cada filtro de seguridad en el camino transaccional
+      spring.security: false
   endpoints:
     web:
       exposure:
         include: health,info,metrics
   endpoint:
     health:
-      show-details: always
+      show-components: always
+      show-details: when-authorized
 
 # Configuración del Recolector Transaccional ISO 8583
 recolector:
   tcp:
     port: 15000
-    timeout-ms: 10000
-    worker-threads: 200
+    timeout-ms: 30000
+    max-frame-bytes: 8192
+    backlog: 2048
+  iso:
+    # Moneda por defecto (DE 49 / DE 54): 320 = Quetzal (GTQ), 840 = Dólar (USD)
+    moneda: "320"
   corebancario:
     url: http://localhost:${server.port}/api/core
-    connect-timeout-ms: 3000
+    api-key: ${recolector.seguridad.api-key}
+    connect-timeout-ms: 2000
     read-timeout-ms: 5000
-    retries: 2
+    reintentos: 2
+    espera-reintento-ms: 100
+  seguridad:
+    api-key: ${CORE_API_KEY:nexus-core-api-key-desarrollo}
+    admin-usuario: ${ADMIN_USER:admin}
+    admin-clave: ${ADMIN_PASSWORD:Nexus2026_Admin}
   idempotencia:
     ttl-minutes: 60
     max-entries: 50000

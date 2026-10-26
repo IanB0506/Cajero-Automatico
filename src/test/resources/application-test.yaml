@@ -1,8 +1,8 @@
-# Perfil de pruebas: H2 en memoria (modo SQL Server) para que la suite sea
-# autocontenida y repetible, sin depender ni ensuciar la BD CoreBancario5B.
+# Perfil de pruebas: H2 en memoria (modo SQL Server) para que la suite sea autocontenida y repetible,
+# sin depender ni ensuciar la BD CoreBancario5B. Cada contexto de Spring usa su propia base.
 spring:
   datasource:
-    url: jdbc:h2:mem:corebancario;MODE=MSSQLServer;DB_CLOSE_DELAY=-1
+    url: jdbc:h2:mem:corebancario-${random.uuid};MODE=MSSQLServer;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=20000
     driver-class-name: org.h2.Driver
     username: sa
     password:
@@ -11,7 +11,23 @@ spring:
     hibernate:
       ddl-auto: create-drop
     defer-datasource-initialization: true
+    properties:
+      hibernate.boot.allow_jdbc_metadata_access: true
+      jakarta.persistence.database-product-name: H2
+      jakarta.persistence.database-major-version: 2
   sql:
     init:
       mode: always
       data-locations: classpath:data-test.sql
+
+# Puertos propios para no chocar con una instancia de la aplicación corriendo en la misma máquina
+server:
+  port: 18087
+
+recolector:
+  tcp:
+    port: 25000
+  seguridad:
+    api-key: api-key-de-pruebas
+    admin-usuario: admin
+    admin-clave: clave-admin-pruebas

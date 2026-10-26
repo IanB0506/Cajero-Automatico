@@ -1,25 +1,40 @@
 package com.banco.recolector.corebancario.controller;
 
+import com.banco.recolector.corebancario.CrearCuentaRequest;
 import com.banco.recolector.corebancario.CuentaDto;
+import com.banco.recolector.corebancario.EditarCuentaRequest;
 import com.banco.recolector.corebancario.TransaccionCoreRequest;
 import com.banco.recolector.corebancario.TransaccionCoreResponse;
 import com.banco.recolector.corebancario.entity.TransaccionEntity;
 import com.banco.recolector.corebancario.service.CoreBancarioService;
-import com.banco.recolector.iso.IsoResponseCode;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
+import jakarta.validation.constraints.Digits;
+import jakarta.validation.constraints.Positive;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
+import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
+import org.springframework.security.core.Authentication;
+import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.method.annotation.HandlerMethodValidationException;
 
+import java.math.BigDecimal;
 import java.util.List;
+import java.util.Map;
+
+import static com.banco.recolector.iso.IsoResponseCode.*;
 
 /**
- * Controlador REST que expone la API del Core Bancario.
+ * API REST del Core Bancario.
  * Recibe transacciones financieras y retorna respuestas normalizadas con códigos HTTP semánticos.
+ * Seguridad (ver SeguridadConfig): POST /transacciones exige la API Key del Recolector; las operaciones
+ * de administración exigen el rol ADMIN; las consultas GET son públicas para el simulador.
  */
 @RestController
 @RequestMapping("/api/core")
-@CrossOrigin(origins = "*")
 public class CoreBancarioController {
 
     private final CoreBancarioService coreService;
@@ -31,83 +46,112 @@ public class CoreBancarioController {
     @PostMapping("/transacciones")
     public ResponseEntity<TransaccionCoreResponse> procesarTransaccion(@Valid @RequestBody TransaccionCoreRequest request) {
         TransaccionCoreResponse resp = coreService.procesar(request);
+        return ResponseEntity.status(estadoHttp(resp)).body(resp);
+    }
 
-        // Mapeo semántico a códigos HTTP estándar según el resultado
+    /**
+     * Mapeo semántico del código ISO (DE 39) a un código HTTP; el cuerpo siempre incluye el DE 39 exacto.
+     */
+    static HttpStatusCode estadoHttp(TransaccionCoreResponse resp) {
         if (resp.exitosa()) {
-            return ResponseEntity.ok(resp);
+            return HttpStatus.OK;
         }
-
-        HttpStatus status = switch (resp.codigoRespuesta()) {
-            case IsoResponseCode.CUENTA_INVALIDA -> HttpStatus.NOT_FOUND;         // 404
-            case IsoResponseCode.TARJETA_BLOQUEADA -> HttpStatus.FORBIDDEN;      // 403
-            case IsoResponseCode.FONDOS_INSUFICIENTES -> HttpStatus.UNPROCESSABLE_ENTITY; // 422
-            case IsoResponseCode.TARJETA_EXPIRADA -> HttpStatus.GONE;             // 410
-            case IsoResponseCode.LIMITE_EXCEDIDO -> HttpStatus.TOO_MANY_REQUESTS; // 429
-            default -> HttpStatus.BAD_REQUEST;                                    // 400
+        return switch (resp.codigoRespuesta()) {
+            case CUENTA_INVALIDA, ORIGINAL_NO_ENCONTRADA -> HttpStatus.NOT_FOUND;                  // 404
+            case TARJETA_BLOQUEADA, PIN_INCORRECTO, INTENTOS_PIN_EXCEDIDOS -> HttpStatus.FORBIDDEN; // 403
+            case FONDOS_INSUFICIENTES -> HttpStatusCode.valueOf(422);                             // 422
+            case TARJETA_EXPIRADA -> HttpStatus.GONE;                                             // 410
+            case LIMITE_EXCEDIDO -> HttpStatus.TOO_MANY_REQUESTS;                                 // 429
+            default -> HttpStatus.BAD_REQUEST;                                                    // 400: 12, 13, 30
         };
-
-        return ResponseEntity.status(status).body(resp);
     }
 
     @GetMapping("/cuentas")
-    public ResponseEntity<List<CuentaDto>> listarCuentas() {
-        return ResponseEntity.ok(coreService.listarCuentas());
+    public List<CuentaDto> listarCuentas() {
+        return coreService.listarCuentas();
     }
 
     @PostMapping("/cuentas")
-    public ResponseEntity<?> crearCuenta(@RequestBody com.banco.recolector.corebancario.CrearCuentaRequest request) {
+    public ResponseEntity<?> crearCuenta(@Valid @RequestBody CrearCuentaRequest request) {
         try {
-            CuentaDto creada = coreService.crearCuenta(request);
-            return ResponseEntity.status(HttpStatus.CREATED).body(creada);
+            return ResponseEntity.status(HttpStatus.CREATED).body(coreService.crearCuenta(request));
         } catch (IllegalArgumentException e) {
-            return ResponseEntity.status(HttpStatus.CONFLICT).body(java.util.Map.of("error", e.getMessage()));
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", e.getMessage()));
+        } catch (DataIntegrityViolationException e) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(Map.of("error", "La cuenta o la tarjeta ya existe"));
         }
     }
 
     @GetMapping("/cuentas/{id}")
     public ResponseEntity<CuentaDto> obtenerCuenta(@PathVariable String id) {
-        return coreService.obtenerCuenta(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        return ResponseEntity.of(coreService.obtenerCuenta(id));
+    }
+
+    @GetMapping("/cuentas/{id}/transacciones")
+    public ResponseEntity<List<TransaccionEntity>> transaccionesDeCuenta(
+            @PathVariable String id,
+            @RequestParam(defaultValue = "50") int limite) {
+        return ResponseEntity.of(coreService.transaccionesDeCuenta(id, limite));
     }
 
     @PutMapping("/cuentas/{id}")
-    public ResponseEntity<?> editarCuenta(@PathVariable String id, @RequestBody com.banco.recolector.corebancario.EditarCuentaRequest request) {
-        return coreService.editarCuenta(id, request)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+    public ResponseEntity<CuentaDto> editarCuenta(@PathVariable String id, @Valid @RequestBody EditarCuentaRequest request) {
+        return ResponseEntity.of(coreService.editarCuenta(id, request));
     }
 
     @DeleteMapping("/cuentas/{id}")
     public ResponseEntity<Void> eliminarCuenta(@PathVariable String id) {
-        boolean eliminada = coreService.eliminarCuenta(id);
-        return eliminada ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
+        return coreService.eliminarCuenta(id) ? ResponseEntity.noContent().build() : ResponseEntity.notFound().build();
     }
 
     @GetMapping("/transacciones")
-    public ResponseEntity<List<TransaccionEntity>> listarTransacciones() {
-        return ResponseEntity.ok(coreService.listarTransacciones());
+    public List<TransaccionEntity> listarTransacciones(@RequestParam(defaultValue = "200") int limite) {
+        return coreService.listarTransacciones(limite);
     }
 
     @PostMapping("/cuentas/{id}/recargar")
     public ResponseEntity<CuentaDto> recargarCuenta(
             @PathVariable String id,
-            @RequestParam(defaultValue = "500.00") java.math.BigDecimal monto) {
-        return coreService.recargarSaldo(id, monto)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+            @RequestParam(defaultValue = "500.00")
+            @Positive(message = "El monto de la recarga debe ser mayor que cero")
+            @Digits(integer = 13, fraction = 2, message = "El monto admite 2 decimales") BigDecimal monto) {
+        return ResponseEntity.of(coreService.recargarSaldo(id, monto));
     }
 
     @PostMapping("/cuentas/{id}/toggle-bloqueo")
     public ResponseEntity<CuentaDto> toggleBloqueo(@PathVariable String id) {
-        return coreService.toggleBloqueo(id)
-                .map(ResponseEntity::ok)
-                .orElse(ResponseEntity.notFound().build());
+        return ResponseEntity.of(coreService.toggleBloqueo(id));
     }
 
     @PostMapping("/reset")
     public ResponseEntity<String> resetCuentas() {
         coreService.resetCuentas();
         return ResponseEntity.ok("Cuentas restauradas al estado inicial.");
+    }
+
+    /** Verifica las credenciales de administrador (lo usa el login de la interfaz web). */
+    @GetMapping("/admin/sesion")
+    public Map<String, String> sesionAdmin(Authentication autenticacion) {
+        return Map.of("usuario", autenticacion.getName(), "rol", "ADMIN");
+    }
+
+    @ExceptionHandler({MethodArgumentNotValidException.class, HttpMessageNotReadableException.class})
+    public ResponseEntity<?> solicitudInvalida(Exception e, HttpServletRequest request) {
+        String mensaje = e instanceof MethodArgumentNotValidException invalida && invalida.getBindingResult().getFieldError() != null
+                ? invalida.getBindingResult().getFieldError().getDefaultMessage()
+                : "Cuerpo de la solicitud ilegible o con formato inválido";
+        if (request.getRequestURI().endsWith("/transacciones")) {
+            // El Recolector traduce este rechazo a DE 39 = 30 (Error de Formato)
+            return ResponseEntity.badRequest().body(TransaccionCoreResponse.rechazada(
+                    null, ERROR_FORMATO, mensaje, BigDecimal.ZERO, BigDecimal.ZERO));
+        }
+        return ResponseEntity.badRequest().body(Map.of("error", mensaje));
+    }
+
+    @ExceptionHandler(HandlerMethodValidationException.class)
+    public ResponseEntity<Map<String, String>> parametroInvalido(HandlerMethodValidationException e) {
+        String mensaje = e.getAllErrors().stream().findFirst()
+                .map(error -> error.getDefaultMessage()).orElse("Parámetro inválido");
+        return ResponseEntity.badRequest().body(Map.of("error", mensaje));
     }
 }

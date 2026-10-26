@@ -1,14 +1,14 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
          http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
 
     <parent>
         <groupId>org.springframework.boot</groupId>
         <artifactId>spring-boot-starter-parent</artifactId>
-        <version>3.3.4</version>
+        <version>4.1.2</version>
         <relativePath/>
     </parent>
 
@@ -18,30 +18,54 @@
     <packaging>jar</packaging>
 
     <name>Recolector Transaccional ISO 8583 - High Performance Switch</name>
-    <description>Recolector Transaccional de Alto Rendimiento con Spring Boot 4.x / 3.4+, Java 21+, Virtual Threads (Project Loom), j8583 y GraalVM Native AOT</description>
+    <description>Recolector Transaccional de Alto Rendimiento con Spring Boot 4.1, Java 25, Virtual Threads (Project Loom), Spring Integration IP, j8583 y GraalVM Native Image 25</description>
 
     <properties>
-        <java.version>21</java.version>
-        <maven.compiler.source>21</maven.compiler.source>
-        <maven.compiler.target>21</maven.compiler.target>
+        <java.version>25</java.version>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <j8583.version>1.17.0</j8583.version>
-        <wiremock.version>3.5.4</wiremock.version>
+        <wiremock.version>3.13.2</wiremock.version>
+        <jacoco.version>0.8.16</jacoco.version>
+        <!-- Cobertura mínima exigida (rúbrica: > 80 %) -->
+        <jacoco.cobertura.minima>0.80</jacoco.cobertura.minima>
+        <!-- JaCoCo inyecta su agente aquí; vacío por defecto para que @{argLine} siempre resuelva -->
+        <argLine></argLine>
     </properties>
 
     <dependencies>
-        <!-- Spring Boot Starter Web (Tomcat con soporte de Virtual Threads, RestClient, MVC) -->
+        <!-- Spring MVC sobre Tomcat (Virtual Threads), API REST del Core y del simulador -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
-            <artifactId>spring-boot-starter-web</artifactId>
+            <artifactId>spring-boot-starter-webmvc</artifactId>
         </dependency>
 
-        <!-- Spring Boot Starter Data JPA & H2 Database (Tablas de Cuentas y Transacciones del Core Bancario) -->
+        <!-- RestClient (Spring Framework 7) autoconfigurado para el adaptador del Core Bancario -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-restclient</artifactId>
+        </dependency>
+
+        <!-- Cliente HTTP bloqueante con pool de conexiones para el RestClient (ideal con Virtual Threads) -->
+        <dependency>
+            <groupId>org.apache.httpcomponents.client5</groupId>
+            <artifactId>httpclient5</artifactId>
+        </dependency>
+
+        <!-- Servidor TCP ISO 8583 con Spring Integration IP -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-integration</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.integration</groupId>
+            <artifactId>spring-integration-ip</artifactId>
+        </dependency>
+
+        <!-- Core Bancario: tablas de Cuentas y Transacciones -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-data-jpa</artifactId>
         </dependency>
-        <!-- Microsoft SQL Server JDBC Driver -->
         <dependency>
             <groupId>com.microsoft.sqlserver</groupId>
             <artifactId>mssql-jdbc</artifactId>
@@ -53,13 +77,19 @@
             <scope>test</scope>
         </dependency>
 
-        <!-- Spring Boot Starter Validation (Jakarta Validation) -->
+        <!-- Seguridad: API Key servicio-a-servicio y Basic para administración -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security</artifactId>
+        </dependency>
+
+        <!-- Jakarta Validation -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-validation</artifactId>
         </dependency>
 
-        <!-- Jakarta EE Annotations & Inject API (Requisito estricto de la rúbrica) -->
+        <!-- Jakarta EE 11: Annotations e Inject -->
         <dependency>
             <groupId>jakarta.annotation</groupId>
             <artifactId>jakarta.annotation-api</artifactId>
@@ -70,27 +100,37 @@
             <version>2.0.1</version>
         </dependency>
 
-        <!-- Motor ISO 8583 de Alto Rendimiento (j8583) -->
+        <!-- Motor ISO 8583 (j8583) -->
         <dependency>
             <groupId>net.sf.j8583</groupId>
             <artifactId>j8583</artifactId>
             <version>${j8583.version}</version>
         </dependency>
 
-        <!-- Spring Boot Actuator (Métricas de JVM, Virtual Threads y Health Check) -->
+        <!-- Actuator: health (incluye el socket TCP), métricas de JVM y GC -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-actuator</artifactId>
         </dependency>
 
-        <!-- Spring Boot Starter Test (JUnit 5, AssertJ, Mockito) -->
+        <!-- Pruebas: JUnit 6, AssertJ, Mockito, MockMvc, Spring Security Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
             <artifactId>spring-boot-starter-test</artifactId>
             <scope>test</scope>
         </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
 
-        <!-- WireMock Standalone para simulación de escenarios de Core Bancario -->
+        <!-- WireMock Standalone para simular el Core Bancario -->
         <dependency>
             <groupId>org.wiremock</groupId>
             <artifactId>wiremock-standalone</artifactId>
@@ -101,7 +141,6 @@
 
     <build>
         <plugins>
-            <!-- Plugin Spring Boot para empaquetado Fat JAR y soporte AOT -->
             <plugin>
                 <groupId>org.springframework.boot</groupId>
                 <artifactId>spring-boot-maven-plugin</artifactId>
@@ -110,31 +149,69 @@
                 </configuration>
             </plugin>
 
-            <!-- Plugin de Compilación Java 21+ con parámetros para reflexión AOT -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
-                    <source>21</source>
-                    <target>21</target>
-                    <encoding>UTF-8</encoding>
                     <parameters>true</parameters>
                 </configuration>
             </plugin>
 
-            <!-- Plugin Surefire para pruebas JUnit 5 con habilitación de ZGC y Virtual Threads -->
+            <!-- Pruebas sobre Generational ZGC: la prueba de carga valida pausas <= 1 ms con JFR -->
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <configuration>
-                    <argLine>-XX:+EnableDynamicAgentLoading</argLine>
+                    <argLine>@{argLine} -XX:+EnableDynamicAgentLoading -XX:+UseZGC -Xmx1g</argLine>
                 </configuration>
+            </plugin>
+
+            <!-- Cobertura: reporte en target/site/jacoco y verificación >= 80 % en 'mvn verify' -->
+            <plugin>
+                <groupId>org.jacoco</groupId>
+                <artifactId>jacoco-maven-plugin</artifactId>
+                <version>${jacoco.version}</version>
+                <executions>
+                    <execution>
+                        <id>prepare-agent</id>
+                        <goals>
+                            <goal>prepare-agent</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>report</id>
+                        <phase>test</phase>
+                        <goals>
+                            <goal>report</goal>
+                        </goals>
+                    </execution>
+                    <execution>
+                        <id>check</id>
+                        <goals>
+                            <goal>check</goal>
+                        </goals>
+                        <configuration>
+                            <rules>
+                                <rule>
+                                    <element>BUNDLE</element>
+                                    <limits>
+                                        <limit>
+                                            <counter>LINE</counter>
+                                            <value>COVEREDRATIO</value>
+                                            <minimum>${jacoco.cobertura.minima}</minimum>
+                                        </limit>
+                                    </limits>
+                                </rule>
+                            </rules>
+                        </configuration>
+                    </execution>
+                </executions>
             </plugin>
         </plugins>
     </build>
 
     <profiles>
-        <!-- Perfil para GraalVM Native Image AOT Compilation -->
+        <!-- Binario nativo GraalVM Native Image 25: mvn -Pnative -DskipTests package -->
         <profile>
             <id>native</id>
             <build>
@@ -142,8 +219,6 @@
                     <plugin>
                         <groupId>org.graalvm.buildtools</groupId>
                         <artifactId>native-maven-plugin</artifactId>
-                        <version>0.10.3</version>
-                        <extensions>true</extensions>
                         <executions>
                             <execution>
                                 <id>build-native</id>
@@ -154,12 +229,14 @@
                             </execution>
                         </executions>
                         <configuration>
-                            <mainClass>com.banco.recolector.RecolectorApplication</mainClass>
+                            <imageName>recolector</imageName>
                             <buildArgs>
-                                <buildArg>--no-fallback</buildArg>
+                                <!-- Todo estático salvo glibc: corre en distroless/cc sin librerías extra -->
+                                <buildArg>--static-nolibc</buildArg>
+                                <!-- Instrucciones de CPU genéricas: el binario corre en cualquier x86-64 -->
+                                <buildArg>-march=compatibility</buildArg>
                                 <buildArg>-H:+ReportExceptionStackTraces</buildArg>
-                                <buildArg>--enable-http</buildArg>
-                                <buildArg>--enable-https</buildArg>
+                                <buildArg>--enable-monitoring=heapdump,jfr</buildArg>
                             </buildArgs>
                         </configuration>
                     </plugin>

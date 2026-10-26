@@ -52,7 +52,7 @@ services:
       db-init:
         condition: service_completed_successfully
     environment:
-      SPRING_DATASOURCE_URL: "jdbc:sqlserver://sqlserver:1433;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;"
+      SPRING_DATASOURCE_URL: "jdbc:sqlserver://sqlserver:1433;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;sendStringParametersAsUnicode=false;"
       SPRING_DATASOURCE_USERNAME: sa
       SPRING_DATASOURCE_PASSWORD: ${MSSQL_SA_PASSWORD}
       SERVER_PORT: ${APP_HTTP_PORT}
