@@ -40,7 +40,7 @@ recolector:
     timeout-ms: 10000
     worker-threads: 200
   corebancario:
-    url: http://localhost:8080/api/core
+    url: http://localhost:${server.port}/api/core
     connect-timeout-ms: 3000
     read-timeout-ms: 5000
     retries: 2

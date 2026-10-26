@@ -55,9 +55,10 @@ services:
       SPRING_DATASOURCE_URL: "jdbc:sqlserver://sqlserver:1433;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;"
       SPRING_DATASOURCE_USERNAME: sa
       SPRING_DATASOURCE_PASSWORD: ${MSSQL_SA_PASSWORD}
+      SERVER_PORT: ${APP_HTTP_PORT}
       TZ: ${TZ}
     ports:
-      - "${APP_HTTP_PORT}:8080"
+      - "${APP_HTTP_PORT}:${APP_HTTP_PORT}"
       - "${APP_TCP_PORT}:15000"
 
   # Solo se ejecuta a pedido (perfil "tests"); usa H2 en memoria, no necesita SQL Server

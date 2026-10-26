@@ -36,13 +36,13 @@ La primera vez tarda varios minutos (descarga SQL Server y las dependencias de M
 |---|---|---|
 | `cajero-sqlserver` | SQL Server 2022 con los datos en el volumen `sqlserver-data` | `localhost,14333` |
 | `cajero-db-init` | Crea la BD `CoreBancario5B` y ejecuta `init_sqlserver.sql`; termina al acabar (`Exited (0)` es lo esperado) | — |
-| `cajero-app` | Recolector ISO 8583 + Core Bancario + interfaz web | `8080` (web) y `15000` (TCP) |
+| `cajero-app` | Recolector ISO 8583 + Core Bancario + interfaz web | `8087` (web) y `15000` (TCP) |
 
 Cuando `docker compose ps` muestre `cajero-app` como **healthy**:
 
-- **Cajero ATM (interfaz web):** http://localhost:8080
-- **Salud:** http://localhost:8080/actuator/health
-- **Postman:** importar `postman_collection.json` con `baseUrl = http://localhost:8080`
+- **Cajero ATM (interfaz web):** http://localhost:8087
+- **Salud:** http://localhost:8087/actuator/health
+- **Postman:** importar `postman_collection.json` (ya trae `baseUrl = http://localhost:8087`)
 - **Socket ISO 8583:** `localhost:15000` (prefijo de 2 bytes con la longitud de la trama)
 - **SQL Server (SSMS / Azure Data Studio):** servidor `localhost,14333`, usuario `sa`, contraseña definida en `.env`
 
@@ -54,7 +54,7 @@ Cuando `docker compose ps` muestre `cajero-app` como **healthy**:
 | Recompilar después de cambiar el código | `docker compose up -d --build` |
 | Ejecutar las 18 pruebas automatizadas | `docker compose --profile tests run --rm tests` |
 
-La contraseña de `sa`, los puertos y la zona horaria se configuran en el archivo **`.env`**. Si los puertos 8080, 15000 o 14333 ya están ocupados en el equipo (por ejemplo, porque la aplicación también corre fuera de Docker), cámbialos ahí. Si se cambia la contraseña después del primer arranque, hay que ejecutar `docker compose down -v` para recrear la BD.
+La contraseña de `sa`, los puertos y la zona horaria se configuran en el archivo **`.env`**. Si los puertos 8087, 15000 o 14333 ya están ocupados en el equipo (por ejemplo, porque la aplicación también corre fuera de Docker), cámbialos ahí. Si se cambia la contraseña después del primer arranque, hay que ejecutar `docker compose down -v` para recrear la BD.
 
 ---
 
@@ -255,6 +255,7 @@ El `Dockerfile` tiene tres etapas:
 2. **`test` (opcional):** parte de `build` y ejecuta `mvn test` sobre H2 en memoria. Se usa con `docker compose --profile tests run --rm tests`.
 3. **`runtime`:** `eclipse-temurin:21-jre` con solo el JAR:
    - Ejecutado con el usuario sin privilegios `recolector`.
+   - Escucha en el puerto **8087** (variable `SERVER_PORT`; en `docker compose` se toma de `APP_HTTP_PORT` en `.env`).
    - Flags de JVM: `-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=75` (variable `JAVA_OPTS`).
    - `HEALTHCHECK` contra `/actuator/health`.
 
@@ -266,9 +267,9 @@ Lo recomendado es `docker compose` (ver la [sección 0](#0-inicio-rápido-con-do
 # Compilar la imagen
 docker build -t cajero-automatico/recolector-iso8583:latest .
 
-# Ejecutar exponiendo REST/Actuator (8080) y el socket TCP (15000)
+# Ejecutar exponiendo REST/Actuator (8087) y el socket TCP (15000)
 docker run -d --name cajero-app `
-  -p 8080:8080 -p 15000:15000 `
+  -p 8087:8087 -p 15000:15000 `
   -e SPRING_DATASOURCE_URL="jdbc:sqlserver://host.docker.internal:1434;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;" `
   -e SPRING_DATASOURCE_PASSWORD="admin" `
   cajero-automatico/recolector-iso8583:latest
