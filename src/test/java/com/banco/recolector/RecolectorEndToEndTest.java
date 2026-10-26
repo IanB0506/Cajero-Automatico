@@ -9,6 +9,7 @@ import com.solab.iso8583.IsoType;
 import org.junit.jupiter.api.*;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -19,6 +20,7 @@ import java.util.Optional;
 import static org.junit.jupiter.api.Assertions.*;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
+@ActiveProfiles("test")
 @TestMethodOrder(MethodOrderer.OrderAnnotation.class)
 @DisplayName("Pruebas End-to-End del Recolector Transaccional ISO 8583 sobre Socket TCP y Virtual Threads")
 public class RecolectorEndToEndTest {

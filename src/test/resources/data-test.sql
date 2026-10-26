@@ -1,0 +1,7 @@
+-- Cuentas semilla del perfil de pruebas (mismas que init_sqlserver.sql)
+INSERT INTO cuentas (numero_cuenta, pan, titular, saldo_disponible, saldo_contable, limite_diario, retirado_hoy, estado, pin, banco) VALUES
+('1001-2002-3001', '4532000000000001', 'CARLOS PEREZ', 1500.00, 1500.00, 500.00, 0.00, 'ACTIVE', '1234', 'BANCO INDUSTRIAL'),
+('1001-2002-3002', '5412000000000002', 'MARIA GOMEZ', 350.00, 350.00, 300.00, 0.00, 'ACTIVE', '4321', 'G&T CONTINENTAL'),
+('1001-2002-3003', '4000000000000003', 'JUAN LOPEZ', 500.00, 500.00, 200.00, 0.00, 'EXPIRED', '2222', 'BANRURAL'),
+('1001-2002-3004', '4000000000000004', 'ANA MORALES', 1000.00, 1000.00, 500.00, 0.00, 'BLOCKED', '9999', 'BAC CREDOMATIC'),
+('1001-2002-3005', '4000000000000005', 'PEDRO RAMOS', 10.00, 10.00, 100.00, 0.00, 'ACTIVE', '1111', 'BANCO PROMERICA');

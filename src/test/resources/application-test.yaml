@@ -1,0 +1,17 @@
+# Perfil de pruebas: H2 en memoria (modo SQL Server) para que la suite sea
+# autocontenida y repetible, sin depender ni ensuciar la BD CoreBancario5B.
+spring:
+  datasource:
+    url: jdbc:h2:mem:corebancario;MODE=MSSQLServer;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  jpa:
+    database-platform: org.hibernate.dialect.H2Dialect
+    hibernate:
+      ddl-auto: create-drop
+    defer-datasource-initialization: true
+  sql:
+    init:
+      mode: always
+      data-locations: classpath:data-test.sql

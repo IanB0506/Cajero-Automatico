@@ -9,6 +9,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.test.context.ActiveProfiles;
 
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
@@ -24,6 +25,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.DEFINED_PORT)
+@ActiveProfiles("test")
 @DisplayName("Simulación de Carga Transaccional de Alto Rendimiento (2,000+ Transacciones con Virtual Threads)")
 public class LoadTestSimulationTest {
 
@@ -133,12 +135,12 @@ public class LoadTestSimulationTest {
         log.info("Total Transacciones : {}", TOTAL_TRANSACTIONS);
         log.info("Transacciones OK    : {}", exitosas.get());
         log.info("Transacciones Fallo : {}", fallidas.get());
-        log.info("Tiempo Total        : {} ms ({:.2f} s)", globalDurationMs, durationSec);
-        log.info("Throughput Estimado : {:.2f} TPS (Transacciones por Segundo)", tps);
+        log.info("Tiempo Total        : {} ms ({} s)", globalDurationMs, String.format("%.2f", durationSec));
+        log.info("Throughput Estimado : {} TPS (Transacciones por Segundo)", String.format("%.2f", tps));
         log.info("Latencia p50 (Mediana): {} ms", p50);
         log.info("Latencia p95         : {} ms", p95);
         log.info("Latencia p99         : {} ms", p99);
-        log.info("Tasa de Éxito        : {:.2f}%", (exitosas.get() * 100.0) / TOTAL_TRANSACTIONS);
+        log.info("Tasa de Éxito        : {}%", String.format("%.2f", (exitosas.get() * 100.0) / TOTAL_TRANSACTIONS));
         log.info("========================================================================");
 
         assertEquals(TOTAL_TRANSACTIONS, exitosas.get(), "Todas las transacciones concurrentes deben aprobar");
