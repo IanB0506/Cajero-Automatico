@@ -47,7 +47,6 @@ services:
 
   app:
     build: .
-    image: cajero-automatico/recolector-iso8583:latest
     container_name: cajero-app
     depends_on:
       db-init:
@@ -66,7 +65,6 @@ services:
     build:
       context: .
       target: test
-    image: cajero-automatico/recolector-iso8583:tests
     profiles: ["tests"]
 
 volumes:
