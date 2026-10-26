@@ -1,0 +1,54 @@
+spring:
+  application:
+    name: recolector-transaccional-iso8583
+  threads:
+    virtual:
+      enabled: true
+  datasource:
+    url: jdbc:sqlserver://127.0.0.1:1434;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;
+    driver-class-name: com.microsoft.sqlserver.jdbc.SQLServerDriver
+    username: sa
+    password: admin
+    hikari:
+      maximum-pool-size: 1
+      minimum-idle: 1
+  jpa:
+    database-platform: org.hibernate.dialect.SQLServerDialect
+    hibernate:
+      ddl-auto: update
+    show-sql: false
+    properties:
+      hibernate:
+        format_sql: false
+
+server:
+  port: 8080
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info,metrics
+  endpoint:
+    health:
+      show-details: always
+
+# Configuración del Recolector Transaccional ISO 8583
+recolector:
+  tcp:
+    port: 15000
+    timeout-ms: 10000
+    worker-threads: 200
+  corebancario:
+    url: http://localhost:8080/api/core
+    connect-timeout-ms: 3000
+    read-timeout-ms: 5000
+    retries: 2
+  idempotencia:
+    ttl-minutes: 60
+    max-entries: 50000
+
+logging:
+  level:
+    root: INFO
+    com.banco.recolector: INFO

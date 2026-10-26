@@ -1,0 +1,464 @@
+{
+  "info": {
+    "_postman_id": "c8a4918e-42b7-4b19-9132-7a2e4e150001",
+    "name": "RED NEXUS - Pasarela Transaccional ISO 8583 & Core Multibanca",
+    "description": "Colección oficial y actualizada para la pasarela financiera RED NEXUS (Spring Boot 3.3.4, Java 21 Virtual Threads Loom, Microsoft SQL Server 'CoreBancario5B' y Sockets TCP ISO 8583 :15000).\n\nIncluye pruebas para transacciones ISO 8583 (0100/0110, 0200/0210, 0420/0430, 0800/0810), administración CRUD de cuentas multibanca en SQL Server, métricas Loom y pruebas de estrés con ráfagas concurrentes.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "http://localhost:8080",
+      "type": "string"
+    }
+  ],
+  "item": [
+    {
+      "name": "01 - Transacciones Financieras ISO 8583 (/api/iso)",
+      "item": [
+        {
+          "name": "01. Retiro de Efectivo ATM (MTI 0200 - Q. 100.00 Banco Industrial)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"pan\": \"4532000000000001\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100201\",\n  \"rrn\": \"262700000001\",\n  \"moneda\": \"GTQ\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Envía una solicitud financiera MTI 0200 para retiro de efectivo en cajero automático. El switch valida saldo en SQL Server, debita la cuenta y retorna MTI 0210 con código de aprobación 00 y desglose de DE 54."
+          }
+        },
+        {
+          "name": "02. Consulta de Saldo en Pantalla (MTI 0100 - G&T Continental)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0100\",\n  \"pan\": \"5412000000000002\",\n  \"cuenta\": \"1001-2002-3002\",\n  \"monto\": 0.0,\n  \"processingCode\": \"300000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100202\",\n  \"rrn\": \"262700000002\",\n  \"moneda\": \"GTQ\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Envía una solicitud de autorización MTI 0100 (Processing Code 300000) para consulta de saldo en cuenta. Retorna MTI 0110 con saldo contable y disponible."
+          }
+        },
+        {
+          "name": "03. Reversa Automática por Falla de Dispensador (MTI 0420)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0420\",\n  \"pan\": \"4532000000000001\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100203\",\n  \"rrn\": \"262700000003\",\n  \"moneda\": \"GTQ\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Genera una trama de reversa MTI 0420 para devolver el dinero a la cuenta del usuario en SQL Server tras un fallo mecánico simulado."
+          }
+        },
+        {
+          "name": "04. Prueba de Red y Heartbeat Echo Test (MTI 0800)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0800\",\n  \"pan\": \"4532000000000001\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 0.0,\n  \"processingCode\": \"000000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100204\",\n  \"rrn\": \"262700000004\",\n  \"moneda\": \"GTQ\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Verifica el estado del enlace y disponibilidad del switch transaccional enviando una trama de administración de red MTI 0800."
+          }
+        },
+        {
+          "name": "05. Rechazo por Fondos Insuficientes (Código ISO 51)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"pan\": \"4000000000000005\",\n  \"cuenta\": \"1001-2002-3005\",\n  \"monto\": 50000.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100205\",\n  \"rrn\": \"262700000005\",\n  \"moneda\": \"GTQ\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Solicita un monto de Q. 50,000.00 que supera el saldo disponible. El sistema rechaza con código ISO 51 (Fondos Insuficientes)."
+          }
+        },
+        {
+          "name": "06. Rechazo por Tarjeta Bloqueada (Código ISO 67 - BAC)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"pan\": \"4000000000000004\",\n  \"cuenta\": \"1001-2002-3004\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100206\",\n  \"rrn\": \"262700000006\",\n  \"moneda\": \"GTQ\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Intenta operar con una tarjeta en estado BLOCKED. El sistema rechaza inmediatamente con código ISO 67."
+          }
+        }
+      ]
+    },
+    {
+      "name": "02 - Core Bancario Multibanca SQL Server (/api/core)",
+      "item": [
+        {
+          "name": "01. Listar Todas las Cuentas en SQL Server",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas"
+              ]
+            },
+            "description": "Retorna la lista de todas las cuentas y tarjetas registradas en Microsoft SQL Server (CoreBancario5B)."
+          }
+        },
+        {
+          "name": "02. Consultar Cuenta por Número de Cuenta o PAN",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3001",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas",
+                "1001-2002-3001"
+              ]
+            },
+            "description": "Obtiene el detalle individual de una cuenta por su identificador único."
+          }
+        },
+        {
+          "name": "03. Crear Nueva Cuenta Bancaria Multibanca",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"numeroCuenta\": \"1001-2002-3099\",\n  \"titular\": \"ALEJANDRO ESCOBAR\",\n  \"pan\": \"4532000000003099\",\n  \"pin\": \"7777\",\n  \"saldoDisponible\": 1500.0,\n  \"limiteDiario\": 500.0,\n  \"banco\": \"BANCO INDUSTRIAL\",\n  \"estado\": \"ACTIVE\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas"
+              ]
+            },
+            "description": "Inserta una nueva cuenta en la tabla [cuentas] de SQL Server con su respectivo banco y saldo."
+          }
+        },
+        {
+          "name": "04. Editar Datos o Estado de Cuenta",
+          "request": {
+            "method": "PUT",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titular\": \"ALEJANDRO ESCOBAR\",\n  \"pin\": \"7777\",\n  \"saldoDisponible\": 2000.0,\n  \"limiteDiario\": 1000.0,\n  \"estado\": \"ACTIVE\",\n  \"banco\": \"BANCO INDUSTRIAL\"\n}"
+            },
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3099",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas",
+                "1001-2002-3099"
+              ]
+            },
+            "description": "Actualiza la información financiera y el estado de la cuenta en SQL Server."
+          }
+        },
+        {
+          "name": "05. Alternar Bloqueo de Tarjeta (Toggle Lock)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3001/toggle-bloqueo",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas",
+                "1001-2002-3001",
+                "toggle-bloqueo"
+              ]
+            },
+            "description": "Alterna el estado de la cuenta entre ACTIVE y BLOCKED de forma inmediata en SQL Server."
+          }
+        },
+        {
+          "name": "06. Recargar Saldo a Cuenta",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3001/recargar?monto=500.00",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas",
+                "1001-2002-3001",
+                "recargar"
+              ],
+              "query": [
+                {
+                  "key": "monto",
+                  "value": "500.00"
+                }
+              ]
+            },
+            "description": "Inyecta fondos adicionales a la cuenta y los persiste en SQL Server."
+          }
+        },
+        {
+          "name": "07. Eliminar Cuenta Bancaria",
+          "request": {
+            "method": "DELETE",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3099",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas",
+                "1001-2002-3099"
+              ]
+            },
+            "description": "Elimina la cuenta especificada de la base de datos SQL Server."
+          }
+        },
+        {
+          "name": "08. Listar Historial de Transacciones Auditadas",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/transacciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "transacciones"
+              ]
+            },
+            "description": "Consulta el libro de auditoría transaccional de SQL Server (STAN, RRN, montos, saldos anterior/posterior y autorizaciones)."
+          }
+        },
+        {
+          "name": "09. Restablecer Cuentas a Estado Inicial de Prueba",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/reset",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "reset"
+              ]
+            },
+            "description": "Restaura las 6 cuentas oficiales (BI, G&T, Banrural, BAC, Promerica, BAM) a sus saldos iniciales."
+          }
+        }
+      ]
+    },
+    {
+      "name": "03 - Métricas, Concurrencia Loom & Diagnóstico",
+      "item": [
+        {
+          "name": "01. Métricas Operativas del Switch y Virtual Threads",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/metricas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "metricas"
+              ]
+            },
+            "description": "Retorna métricas del recolector: transacciones procesadas/aprobadas/rechazadas, estado del socket TCP :15000, Virtual Threads Loom y memoria JVM."
+          }
+        },
+        {
+          "name": "02. Disparar Ráfaga Concurrente (50 Hilos Virtuales)",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/rafaga?cantidad=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "rafaga"
+              ],
+              "query": [
+                {
+                  "key": "cantidad",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "Ejecuta 50 transacciones simultáneas utilizando Java 21 Virtual Threads (Project Loom) y mide latencia P50, P95 y TPS calculados."
+          }
+        },
+        {
+          "name": "03. Estado de Salud del Sistema (Actuator Health)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/health",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "health"
+              ]
+            },
+            "description": "Verifica que la conexión JDBC contra Microsoft SQL Server y el espacio de almacenamiento del servidor se encuentren UP."
+          }
+        }
+      ]
+    }
+  ]
+}
