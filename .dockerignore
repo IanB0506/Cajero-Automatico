@@ -1,0 +1,11 @@
+target/
+.git/
+.idea/
+.vscode/
+*.iml
+*.pdf
+*.md
+.env
+docker-compose.yml
+postman_collection.json
+init_sqlserver.sql

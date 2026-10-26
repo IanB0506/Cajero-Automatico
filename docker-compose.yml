@@ -1,0 +1,73 @@
+# Levanta el proyecto completo: SQL Server + creación de la BD + Recolector ISO 8583.
+#
+#   docker compose up -d --build                    -> arrancar todo
+#   docker compose --profile tests run --rm tests   -> ejecutar las pruebas
+#
+# Contraseña, puertos y zona horaria se configuran en el archivo .env
+name: cajero-automatico
+
+services:
+  sqlserver:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: cajero-sqlserver
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_PID: Developer
+      MSSQL_SA_PASSWORD: ${MSSQL_SA_PASSWORD}
+      SQLCMDPASSWORD: ${MSSQL_SA_PASSWORD}
+      TZ: ${TZ}
+    ports:
+      - "${SQLSERVER_PORT}:1433"
+    volumes:
+      - sqlserver-data:/var/opt/mssql
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -C -b -Q 'SELECT 1' > /dev/null"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  # Contenedor de un solo uso: crea CoreBancario5B (si no existe) y ejecuta init_sqlserver.sql
+  db-init:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    container_name: cajero-db-init
+    depends_on:
+      sqlserver:
+        condition: service_healthy
+    environment:
+      SQLCMDPASSWORD: ${MSSQL_SA_PASSWORD}
+    volumes:
+      - ./init_sqlserver.sql:/scripts/init_sqlserver.sql:ro
+    entrypoint: ["/bin/bash", "-c"]
+    command:
+      - |
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -C -b -Q "IF DB_ID('CoreBancario5B') IS NULL CREATE DATABASE CoreBancario5B" &&
+        /opt/mssql-tools18/bin/sqlcmd -S sqlserver -U sa -C -b -i /scripts/init_sqlserver.sql &&
+        echo ">>> Base de datos CoreBancario5B lista"
+
+  app:
+    build: .
+    image: cajero-automatico/recolector-iso8583:latest
+    container_name: cajero-app
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: "jdbc:sqlserver://sqlserver:1433;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;"
+      SPRING_DATASOURCE_USERNAME: sa
+      SPRING_DATASOURCE_PASSWORD: ${MSSQL_SA_PASSWORD}
+      TZ: ${TZ}
+    ports:
+      - "${APP_HTTP_PORT}:8080"
+      - "${APP_TCP_PORT}:15000"
+
+  # Solo se ejecuta a pedido (perfil "tests"); usa H2 en memoria, no necesita SQL Server
+  tests:
+    build:
+      context: .
+      target: test
+    image: cajero-automatico/recolector-iso8583:tests
+    profiles: ["tests"]
+
+volumes:
+  sqlserver-data:

@@ -7,15 +7,54 @@
 ---
 
 ## 📋 Tabla de Contenido
+0. [Inicio Rápido con Docker (Windows)](#0-inicio-rápido-con-docker-windows)
 1. [Descripción del Proyecto y Objetivos](#1-descripción-del-proyecto-y-objetivos)
 2. [Arquitectura del Sistema & Flujo Transaccional](#2-arquitectura-del-sistema--flujo-transaccional)
 3. [Cumplimiento de la Rúbrica de Evaluación (100%)](#3-cumplimiento-de-la-rúbrica-de-evaluación-100)
 4. [Estructura del Repositorio](#4-estructura-del-repositorio)
 5. [Motor ISO 8583 y Data Elements (DE)](#5-motor-iso-8583-y-data-elements-de)
 6. [Core Bancario & Adaptador RestClient Resiliente](#6-core-bancario--adaptador-restclient-resiliente)
-7. [Compilación AOT, GraalVM y Docker Distroless](#7-compilación-aot-graalvm-y-docker-distroless)
+7. [Compilación AOT, GraalVM y Docker](#7-compilación-aot-graalvm-y-docker)
 8. [Reporte Técnico de Pruebas y Métricas de Rendimiento](#8-reporte-técnico-de-pruebas-y-métricas-de-rendimiento)
 9. [Guía de Defensa del Proyecto (Presentación Oral 15 Minutos)](#9-guía-de-defensa-del-proyecto-presentación-oral-15-minutos)
+
+---
+
+## 0. Inicio Rápido con Docker (Windows)
+
+Solo se necesita **Docker Desktop** (con el backend WSL 2 y contenedores Linux, que es su configuración por defecto). No hace falta instalar Java, Maven ni SQL Server.
+
+```powershell
+git clone https://github.com/IanB0506/Cajero-Automatico.git
+cd Cajero-Automatico
+docker compose up -d --build
+```
+
+La primera vez tarda varios minutos (descarga SQL Server y las dependencias de Maven). `docker compose` levanta, en orden:
+
+| Contenedor | Función | Puerto en Windows |
+|---|---|---|
+| `cajero-sqlserver` | SQL Server 2022 con los datos en el volumen `sqlserver-data` | `localhost,14333` |
+| `cajero-db-init` | Crea la BD `CoreBancario5B` y ejecuta `init_sqlserver.sql`; termina al acabar (`Exited (0)` es lo esperado) | — |
+| `cajero-app` | Recolector ISO 8583 + Core Bancario + interfaz web | `8080` (web) y `15000` (TCP) |
+
+Cuando `docker compose ps` muestre `cajero-app` como **healthy**:
+
+- **Cajero ATM (interfaz web):** http://localhost:8080
+- **Salud:** http://localhost:8080/actuator/health
+- **Postman:** importar `postman_collection.json` con `baseUrl = http://localhost:8080`
+- **Socket ISO 8583:** `localhost:15000` (prefijo de 2 bytes con la longitud de la trama)
+- **SQL Server (SSMS / Azure Data Studio):** servidor `localhost,14333`, usuario `sa`, contraseña definida en `.env`
+
+| Acción | Comando |
+|---|---|
+| Ver los logs de la aplicación | `docker compose logs -f app` |
+| Detener (conserva los datos) | `docker compose down` |
+| Detener y borrar la BD (vuelve a las 5 cuentas iniciales) | `docker compose down -v` |
+| Recompilar después de cambiar el código | `docker compose up -d --build` |
+| Ejecutar las 18 pruebas automatizadas | `docker compose --profile tests run --rm tests` |
+
+La contraseña de `sa`, los puertos y la zona horaria se configuran en el archivo **`.env`**. Si los puertos 8080, 15000 o 14333 ya están ocupados en el equipo (por ejemplo, porque la aplicación también corre fuera de Docker), cámbialos ahí. Si se cambia la contraseña después del primer arranque, hay que ejecutar `docker compose down -v` para recrear la BD.
 
 ---
 
@@ -146,7 +185,9 @@ El proyecto cumple estrictamente con el árbol de directorios estipulado en la g
 │       │       └── WireMockCoreBancarioIntegrationTest.java # Pruebas con WireMock (7 casos)
 │       └── resources/
 │           └── load-test-iso8583.jmx            # Plan de pruebas de carga para Apache JMeter
-├── Dockerfile                                   # Multi-stage build (GraalVM 21/25 + Distroless nonroot)
+├── Dockerfile                                   # Multi-stage build (Maven + JRE 21, usuario no root)
+├── docker-compose.yml                           # SQL Server + inicialización de BD + aplicación
+├── .env                                         # Contraseña, puertos y zona horaria para Docker
 ├── pom.xml                                      # Descriptor Maven con perfiles nativos AOT
 └── README.md                                    # Documentación completa y reporte técnico
 ```
@@ -201,7 +242,7 @@ El adaptador HTTP implementa el cliente nativo **Spring RestClient** (introducid
 
 ---
 
-## 7. Compilación AOT, GraalVM y Docker Distroless
+## 7. Compilación AOT, GraalVM y Docker
 
 ### 1. Registro de RuntimeHints para Compilación AOT
 La clase `IsoAotRuntimeHints.java` implementa la interfaz `RuntimeHintsRegistrar` y está registrada en `META-INF/spring/aot.factories`:
@@ -209,24 +250,28 @@ La clase `IsoAotRuntimeHints.java` implementa la interfaz `RuntimeHintsRegistrar
 - Permite que el compilador `native-image` incluya los esquemas XML y fábricas dinámicas en el binario sin errores de reflexión en tiempo de ejecución.
 
 ### 2. Dockerfile Multi-Etapa
-El contenedor utiliza dos etapas:
-1. **Etapa de Construcción:** Basada en `ghcr.io/graalvm/native-image-community:21-ol9` con Maven para compilar el código fuente y producir el binario nativo AOT (`recolector-transaccional-iso8583`).
-2. **Etapa de Ejecución:** Basada en la imagen minificada de Google `gcr.io/distroless/cc-debian12:nonroot`:
-   - Sin shell (`/bin/sh`, `/bin/bash`), sin gestor de paquetes (`apt`, `dpkg`), eliminando más del 95% de la superficie de ataque.
-   - Ejecutado bajo el usuario no privilegiado `nonroot:nonroot` (UID 65532).
-   - Inyección de flags de memoria: `-XX:+UseZGC -XX:+ZGenerational` y `-Dspring.threads.virtual.enabled=true`.
+El `Dockerfile` tiene tres etapas:
+1. **`build`:** `maven:3.9-eclipse-temurin-21` descarga las dependencias (en una capa cacheada mientras no cambie el `pom.xml`) y compila el JAR.
+2. **`test` (opcional):** parte de `build` y ejecuta `mvn test` sobre H2 en memoria. Se usa con `docker compose --profile tests run --rm tests`.
+3. **`runtime`:** `eclipse-temurin:21-jre` con solo el JAR:
+   - Ejecutado con el usuario sin privilegios `recolector`.
+   - Flags de JVM: `-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=75` (variable `JAVA_OPTS`).
+   - `HEALTHCHECK` contra `/actuator/health`.
+
+La imagen corre sobre la JVM. El perfil Maven `native` del `pom.xml` sigue disponible para compilar con GraalVM Native Image, pero la imagen Docker no lo usa.
 
 ### 3. Comandos de Compilación y Ejecución
+Lo recomendado es `docker compose` (ver la [sección 0](#0-inicio-rápido-con-docker-windows)), que además levanta SQL Server y crea la base de datos. Para usar solo la imagen de la aplicación contra un SQL Server propio:
 ```powershell
-# Compilar imagen Docker nativa
-docker build -t banco/recolector-transaccional-iso8583:latest .
+# Compilar la imagen
+docker build -t cajero-automatico/recolector-iso8583:latest .
 
-# Ejecutar contenedor exponiendo socket TCP (15000) y REST/Actuator (8080)
-docker run -d --name iso-recolector \
-  -p 15000:15000 \
-  -p 8080:8080 \
-  --memory="256m" --cpus="2" \
-  banco/recolector-transaccional-iso8583:latest
+# Ejecutar exponiendo REST/Actuator (8080) y el socket TCP (15000)
+docker run -d --name cajero-app `
+  -p 8080:8080 -p 15000:15000 `
+  -e SPRING_DATASOURCE_URL="jdbc:sqlserver://host.docker.internal:1434;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;" `
+  -e SPRING_DATASOURCE_PASSWORD="admin" `
+  cajero-automatico/recolector-iso8583:latest
 ```
 
 ---
