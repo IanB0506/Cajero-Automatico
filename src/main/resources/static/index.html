@@ -2814,7 +2814,7 @@
               const aprobada = t.codigoRespuesta === '00';
               const credito = t.tipoOperacion === 'REVERSA' || t.tipoOperacion === 'DEVOLUCION';
               const signo = (!aprobada || t.tipoOperacion === 'CONSULTA') ? '' : (credito ? '+' : '-');
-              const color = !aprobada ? 'text-slate-500' : (credito ? 'text-emerald-400' : 'text-rose-400');
+              const color = !aprobada ? 'text-slate-500' : (t.tipoOperacion === 'CONSULTA' ? 'text-slate-300' : (credito ? 'text-emerald-400' : 'text-rose-400'));
               return `
               <div class="flex justify-between border-b border-slate-800 py-1 font-mono">
                 <span class="text-slate-300">${t.fechaHora ? t.fechaHora.substring(11, 19) : '--:--'} • ${t.tipoOperacion}${aprobada ? '' : ' (DE39 ' + t.codigoRespuesta + ')'}</span>

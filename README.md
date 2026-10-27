@@ -24,7 +24,7 @@ Switch transaccional que recibe tramas **ISO 8583** por **TCP**, las traduce a u
 | `MANUAL_DE_USUARIO_RED_NEXUS.pdf` | Manual de usuario del cajero web y del panel de administración (con capturas) |
 | `MANUAL_TECNICO_RED_NEXUS_ISO8583.pdf` | Manual técnico: arquitectura, protocolo, base de datos, API REST, configuración, despliegue y operación |
 | `postman_collection.json` | Colección de Postman con pruebas automáticas |
-| `docs/manuales/` | Fuentes HTML de los dos manuales (para regenerar los PDF: abrir en Chrome o Edge → Imprimir → Guardar como PDF) |
+| `docs/manuales/` | Fuentes HTML y capturas de los dos manuales. Para regenerar un PDF: abrir el HTML en Chrome o Edge → Imprimir → Guardar como PDF, tamaño Carta, con **Gráficos de fondo** activado |
 
 ---
 

@@ -1,0 +1,613 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual Técnico - Recolector Transaccional ISO 8583 RED NEXUS</title>
+<link rel="stylesheet" href="estilo.css">
+<style>
+  .diagrama { width: 100%; height: auto; border: 1px solid var(--linea); border-radius: 6px; background: #fbfcfe; }
+  .trama td:first-child, .trama td:nth-child(2) { white-space: nowrap; }
+  .trama code { word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+
+<!-- ============================================================ PORTADA -->
+<div class="portada">
+  <div>
+    <div class="sello">Manual técnico</div>
+    <h1>RED NEXUS</h1>
+    <p class="subtitulo">Recolector Transaccional ISO 8583 de alto rendimiento</p>
+    <p class="resumen">Arquitectura, protocolo ISO 8583, Core Bancario, API REST, seguridad, configuración,
+      despliegue con Docker (binario nativo GraalVM sobre Distroless), operación y pruebas.</p>
+  </div>
+  <table>
+    <tr><td>Artefacto</td><td>com.banco:recolector-transaccional-iso8583:1.0.0</td></tr>
+    <tr><td>Plataforma</td><td>Java 25 · Spring Boot 4.1.2 · Spring Framework 7 · Jakarta EE 11</td></tr>
+    <tr><td>Integración</td><td>Spring Integration IP 7.1 (TCP) · RestClient · j8583 1.17</td></tr>
+    <tr><td>Base de datos</td><td>Microsoft SQL Server 2022 (CoreBancario5B)</td></tr>
+    <tr><td>Imagen</td><td>GraalVM Native Image 25 → gcr.io/distroless/cc-debian12:nonroot</td></tr>
+    <tr><td>Puertos</td><td>8087 HTTP (web, API, Actuator) · 15000 TCP (ISO 8583)</td></tr>
+    <tr><td>Fecha</td><td>Octubre de 2026</td></tr>
+  </table>
+</div>
+
+<!-- ============================================================ ÍNDICE -->
+<section class="capitulo indice">
+  <h2>Contenido</h2>
+  <ol>
+    <li>Descripción general</li>
+    <li>Arquitectura</li>
+    <li>Protocolo ISO 8583</li>
+    <li>Core Bancario y modelo de datos</li>
+    <li>API REST</li>
+    <li>Seguridad</li>
+    <li>Configuración</li>
+    <li>Despliegue</li>
+    <li>Operación y monitoreo</li>
+    <li>Pruebas y calidad</li>
+    <li>Solución de problemas</li>
+  </ol>
+  <p>Documentos relacionados en el repositorio: <code>README.md</code> (instalación y uso), <code>DOCUMENTACION.md</code>
+    (reporte técnico con decisiones de diseño y mediciones), <code>MANUAL_DE_USUARIO_RED_NEXUS.pdf</code> y
+    <code>postman_collection.json</code>.</p>
+</section>
+
+<!-- ============================================================ 1 -->
+<section class="capitulo">
+  <h2>1. Descripción general</h2>
+  <p>El sistema es un <strong>switch transaccional</strong>: recibe mensajes <strong>ISO 8583:1987</strong> de terminales
+    (cajeros y POS) por un socket TCP, los traduce a llamadas REST/JSON hacia un <strong>Core Bancario</strong> que mantiene
+    cuentas y transacciones en SQL Server, y responde a la terminal con el mensaje ISO correspondiente y el código de acción
+    en el <strong>DE 39</strong>. La misma aplicación sirve un cajero web y un panel de administración para la demostración.</p>
+
+  <h3>Tecnologías</h3>
+  <table>
+    <thead><tr><th>Área</th><th>Tecnología</th><th>Uso</th></tr></thead>
+    <tbody>
+      <tr><td>Lenguaje</td><td>Java 25</td><td>Virtual Threads, records, pattern matching, switch expressions</td></tr>
+      <tr><td>Framework</td><td>Spring Boot 4.1.2 / Spring Framework 7.0</td><td>Web MVC (Tomcat), Data JPA (Hibernate 7), Security 7, Actuator</td></tr>
+      <tr><td>Servidor TCP</td><td>Spring Integration IP 7.1</td><td><code>TcpNetServerConnectionFactory</code> + <code>Tcp.inboundGateway</code></td></tr>
+      <tr><td>ISO 8583</td><td>j8583 1.17.0</td><td>Parseo y codificación según <code>j8583.xml</code></td></tr>
+      <tr><td>Cliente HTTP</td><td>RestClient + Apache HttpClient 5</td><td>Llamadas del Recolector al Core con <code>RetryTemplate</code></td></tr>
+      <tr><td>Jakarta EE 11</td><td><code>jakarta.inject</code>, <code>jakarta.annotation</code>, <code>jakarta.validation</code>, <code>jakarta.persistence</code></td><td>Inyección, ciclo de vida, validación, entidades</td></tr>
+      <tr><td>Base de datos</td><td>SQL Server 2022 (driver mssql-jdbc)</td><td>Cuentas y transacciones; H2 en modo MSSQL solo en pruebas</td></tr>
+      <tr><td>Imagen nativa</td><td>GraalVM Native Image 25</td><td>Binario <code>recolector</code> con AOT de Spring</td></tr>
+      <tr><td>GC (modo JVM)</td><td>Generational ZGC</td><td>Pausas sub-milisegundo</td></tr>
+      <tr><td>Interfaz</td><td>HTML + Tailwind CSS + JavaScript</td><td><code>src/main/resources/static/index.html</code></td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 2 -->
+<section class="capitulo">
+  <h2>2. Arquitectura</h2>
+  <svg class="diagrama" viewBox="0 0 880 420" xmlns="http://www.w3.org/2000/svg" font-family="Segoe UI, Arial, sans-serif" font-size="12">
+    <defs>
+      <marker id="flecha" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+        <path d="M0,0 L10,5 L0,10 z" fill="#0f2747"/>
+      </marker>
+    </defs>
+    <!-- Clientes -->
+    <rect x="20" y="40" width="170" height="70" rx="8" fill="#e8f1fb" stroke="#0e5aa7"/>
+    <text x="105" y="68" text-anchor="middle" font-weight="bold">Terminales ATM / POS</text>
+    <text x="105" y="88" text-anchor="middle" fill="#5b6476">JMeter, pruebas E2E</text>
+    <rect x="20" y="250" width="170" height="70" rx="8" fill="#e8f1fb" stroke="#0e5aa7"/>
+    <text x="105" y="278" text-anchor="middle" font-weight="bold">Navegador</text>
+    <text x="105" y="298" text-anchor="middle" fill="#5b6476">Cajero web y administración</text>
+    <!-- Aplicación -->
+    <rect x="230" y="15" width="630" height="390" rx="10" fill="#ffffff" stroke="#0f2747" stroke-dasharray="6 4"/>
+    <text x="545" y="36" text-anchor="middle" font-weight="bold" fill="#0f2747">Aplicación Spring Boot 4.1 (binario nativo GraalVM o JVM)</text>
+    <rect x="250" y="50" width="190" height="80" rx="8" fill="#f3f5f9" stroke="#5b6476"/>
+    <text x="345" y="75" text-anchor="middle" font-weight="bold">Spring Integration IP</text>
+    <text x="345" y="94" text-anchor="middle">TCP :15000, prefijo 2 bytes</text>
+    <text x="345" y="112" text-anchor="middle">1 Virtual Thread por conexión</text>
+    <rect x="250" y="240" width="190" height="90" rx="8" fill="#f3f5f9" stroke="#5b6476"/>
+    <text x="345" y="263" text-anchor="middle" font-weight="bold">Tomcat :8087</text>
+    <text x="345" y="282" text-anchor="middle">IsoSimuladorController</text>
+    <text x="345" y="299" text-anchor="middle">CoreBancarioController</text>
+    <text x="345" y="316" text-anchor="middle">Actuator · Spring Security</text>
+    <rect x="480" y="50" width="200" height="110" rx="8" fill="#fff6e0" stroke="#d39b00"/>
+    <text x="580" y="73" text-anchor="middle" font-weight="bold">RecolectorTransaccional-</text>
+    <text x="580" y="90" text-anchor="middle" font-weight="bold">Service</text>
+    <text x="580" y="110" text-anchor="middle">IsoMessageService (j8583)</text>
+    <text x="580" y="128" text-anchor="middle">IdempotenciaService</text>
+    <text x="580" y="146" text-anchor="middle">PinBlock (DE 52)</text>
+    <rect x="480" y="190" width="200" height="70" rx="8" fill="#fff6e0" stroke="#d39b00"/>
+    <text x="580" y="214" text-anchor="middle" font-weight="bold">CoreBancarioClient</text>
+    <text x="580" y="232" text-anchor="middle">RestClient + RetryTemplate</text>
+    <text x="580" y="249" text-anchor="middle">X-API-Key</text>
+    <rect x="700" y="190" width="145" height="140" rx="8" fill="#e8f6ee" stroke="#17703c"/>
+    <text x="772" y="214" text-anchor="middle" font-weight="bold">Core Bancario</text>
+    <text x="772" y="233" text-anchor="middle">CoreBancarioService</text>
+    <text x="772" y="252" text-anchor="middle">bloqueo de fila</text>
+    <text x="772" y="270" text-anchor="middle">UNIQUE(rrn, stan)</text>
+    <text x="772" y="289" text-anchor="middle">PIN SHA-256</text>
+    <text x="772" y="308" text-anchor="middle">JPA / Hibernate</text>
+    <!-- BD -->
+    <ellipse cx="772" cy="375" rx="70" ry="14" fill="#e8f1fb" stroke="#0e5aa7"/>
+    <text x="772" y="380" text-anchor="middle" font-weight="bold">SQL Server 2022</text>
+    <!-- Flechas -->
+    <line x1="190" y1="75" x2="248" y2="88" stroke="#0f2747" stroke-width="1.6" marker-end="url(#flecha)"/>
+    <line x1="190" y1="285" x2="248" y2="285" stroke="#0f2747" stroke-width="1.6" marker-end="url(#flecha)"/>
+    <line x1="440" y1="90" x2="478" y2="100" stroke="#0f2747" stroke-width="1.6" marker-end="url(#flecha)"/>
+    <line x1="440" y1="262" x2="478" y2="140" stroke="#0f2747" stroke-width="1.6" marker-end="url(#flecha)"/>
+    <text x="465" y="200" text-anchor="middle" fill="#5b6476" font-size="10">/api/iso</text>
+    <line x1="580" y1="160" x2="580" y2="188" stroke="#0f2747" stroke-width="1.6" marker-end="url(#flecha)"/>
+    <line x1="680" y1="225" x2="698" y2="225" stroke="#0f2747" stroke-width="1.6" marker-end="url(#flecha)"/>
+    <text x="690" y="182" text-anchor="middle" fill="#5b6476" font-size="10">HTTP /api/core</text>
+    <line x1="440" y1="300" x2="698" y2="300" stroke="#0f2747" stroke-width="1.2" stroke-dasharray="4 3" marker-end="url(#flecha)"/>
+    <text x="570" y="294" text-anchor="middle" fill="#5b6476" font-size="10">administración (/api/core)</text>
+    <line x1="772" y1="330" x2="772" y2="359" stroke="#0f2747" stroke-width="1.6" marker-end="url(#flecha)"/>
+  </svg>
+  <p style="font-size:9pt;color:#5b6476;text-align:center">Figura 1. Componentes y flujo de una transacción.</p>
+
+  <h3>Componentes</h3>
+  <table>
+    <thead><tr><th>Paquete / clase</th><th>Responsabilidad</th></tr></thead>
+    <tbody>
+      <tr><td><code>RecolectorApplication</code></td><td>Arranque; con el argumento <code>--healthcheck</code> consulta <code>/actuator/health</code> y termina con 0 (UP) o 1.</td></tr>
+      <tr><td><code>config.TcpIntegrationConfig</code></td><td>Servidor TCP ISO 8583: fábrica de conexiones, enmarcado de 2 bytes, gateway de entrada.</td></tr>
+      <tr><td><code>config.VirtualThreadsConfig</code></td><td>Ejecutor de Virtual Threads para las conexiones TCP.</td></tr>
+      <tr><td><code>config.SeguridadConfig</code>, <code>ApiKeyAuthenticationFilter</code></td><td>Reglas de acceso, HTTP Basic para administración y API Key para el Recolector.</td></tr>
+      <tr><td><code>config.IsoAotRuntimeHints</code></td><td><code>RuntimeHintsRegistrar</code> para la imagen nativa (reflexión de j8583, <code>j8583.xml</code> y su DTD).</td></tr>
+      <tr><td><code>iso.IsoMessageService</code></td><td>Parseo, codificación y armado de mensajes con j8583; extracción de DE 3, 4, 11, 37, 102 y 52.</td></tr>
+      <tr><td><code>iso.PinBlock</code></td><td>PIN block ISO 9564 formato 0.</td></tr>
+      <tr><td><code>iso.IsoResponseCode</code></td><td>Catálogo de códigos DE 39.</td></tr>
+      <tr><td><code>iso.controller.IsoSimuladorController</code></td><td><code>/api/iso</code>: simulador de tramas, métricas y ráfaga concurrente.</td></tr>
+      <tr><td><code>service.RecolectorTransaccionalService</code></td><td>Orquestación: parseo, idempotencia, llamada al Core, armado de la respuesta (DE 38, 39, 54).</td></tr>
+      <tr><td><code>service.IdempotenciaService</code></td><td>Caché de respuestas por RRN y STAN (retransmisiones).</td></tr>
+      <tr><td><code>service.TcpIsoHealthIndicator</code></td><td>Componente <code>tcpIso</code> de <code>/actuator/health</code>.</td></tr>
+      <tr><td><code>corebancario.CoreBancarioClient</code></td><td>RestClient hacia el Core, reintentos y traducción de fallos a DE 39.</td></tr>
+      <tr><td><code>corebancario.service.CoreBancarioService</code></td><td>Reglas de negocio, bloqueo pesimista, idempotencia en BD, PIN, reversas, administración.</td></tr>
+      <tr><td><code>corebancario.controller.CoreBancarioController</code></td><td><code>/api/core</code>: transacciones, cuentas, administración y mapeo DE 39 → HTTP.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Flujo de una transacción (retiro 0200)</h3>
+  <ol>
+    <li>La terminal envía la trama precedida de su longitud. Spring Integration la recibe en un Virtual Thread.</li>
+    <li><code>RecolectorTransaccionalService</code> la parsea con j8583. Si es ilegible responde <code>30</code> sin cerrar la conexión.</li>
+    <li>Si el par RRN + STAN ya fue respondido, devuelve la misma respuesta (retransmisión).</li>
+    <li>Si faltan STAN, RRN o cuenta, responde <code>30</code>.</li>
+    <li>Arma un <code>TransaccionCoreRequest</code> (record) y lo envía a <code>POST /api/core/transacciones</code> con la cabecera <code>X-API-Key</code>.</li>
+    <li>El Core bloquea la cuenta, valida estado, PIN, monto, límite y saldo, aplica el débito y registra la transacción en una sola transacción de BD.</li>
+    <li>El Recolector arma la respuesta 0210 con DE 38, DE 39 y DE 54 y guarda en la caché las respuestas definitivas (no 68, 91 ni 96).</li>
+  </ol>
+
+  <h3>Concurrencia</h3>
+  <ul>
+    <li>Cada conexión TCP tiene su propio Virtual Thread; el código es bloqueante y secuencial (socket, HTTP, JDBC) sin agotar hilos del sistema operativo.</li>
+    <li><code>spring.threads.virtual.enabled=true</code> aplica Virtual Threads a Tomcat y a las tareas programadas.</li>
+    <li>No se usa <code>synchronized</code> en caminos con E/S (se usa <code>ReentrantLock</code>), para no fijar el hilo virtual a su hilo portador.</li>
+    <li>Pool JDBC de 20 conexiones (Hikari) y pool HTTP de 500 conexiones keep-alive hacia el Core.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 3 -->
+<section class="capitulo">
+  <h2>3. Protocolo ISO 8583</h2>
+  <h3>3.1 Enmarcado</h3>
+  <ul>
+    <li>Cada trama va precedida por <strong>2 bytes con su longitud</strong> (entero sin signo, big-endian), sin contar esos 2 bytes. La respuesta usa el mismo enmarcado.</li>
+    <li>Tamaño máximo de trama: 8.192 bytes (<code>recolector.tcp.max-frame-bytes</code>).</li>
+    <li>La conexión puede quedar abierta para varias transacciones; se cierra tras 30 s sin actividad (<code>recolector.tcp.timeout-ms</code>).</li>
+    <li>Codificación ASCII, bitmaps en hexadecimal, cabecera opcional <code>ISO015000050</code> (las respuestas la incluyen).</li>
+  </ul>
+
+  <h3>3.2 Mensajes</h3>
+  <table>
+    <thead><tr><th>Solicitud</th><th>Respuesta</th><th>Uso</th><th>Campos de la solicitud</th></tr></thead>
+    <tbody>
+      <tr><td>0200</td><td>0210</td><td>Financiera: compra (DE 3 = 00xxxx), retiro (01), devolución (20), transferencia (40)</td><td>2, 3, 4, 7, 11, 12, 13, 14, 22, 25, 37, 41, 42, 49, 52, 102, 103</td></tr>
+      <tr><td>0100</td><td>0110</td><td>Autorización / consulta de saldo (DE 3 = 30xxxx)</td><td>2, 3, 4, 7, 11, 12, 13, 37, 41, 42, 49, 52, 102</td></tr>
+      <tr><td>0420</td><td>0430</td><td>Reversa: DE 37 = RRN de la transacción original; DE 11 propio</td><td>2, 3, 4, 7, 11, 12, 13, 37, 41, 42, 49, 90, 102</td></tr>
+      <tr><td>0800</td><td>0810</td><td>Gestión de red (DE 70 = 301, echo test)</td><td>7, 11, 12, 13, 70</td></tr>
+    </tbody>
+  </table>
+  <p>Las respuestas repiten los campos de la solicitud que su guía admite y agregan DE 38 (autorización, solo si se aprueba),
+    DE 39 y DE 54 (saldos, en 00, 51 y 61). El PIN block (DE 52) nunca se devuelve. Un MTI legible pero no soportado como
+    solicitud responde <code>12</code>.</p>
+
+  <h3>3.3 Campos</h3>
+  <table>
+    <thead><tr><th>DE</th><th>Nombre</th><th>Formato</th><th>Notas</th></tr></thead>
+    <tbody>
+      <tr><td>2</td><td>PAN</td><td>LLVAR</td><td>Si falta DE 102, la cuenta se busca por PAN</td></tr>
+      <tr><td>3</td><td>Código de procesamiento</td><td>n6</td><td>Los 2 primeros dígitos definen la operación</td></tr>
+      <tr><td>4</td><td>Monto</td><td>n12</td><td>Centavos (000000010000 = Q100.00)</td></tr>
+      <tr><td>7</td><td>Fecha y hora de transmisión</td><td>n10</td><td>MMddHHmmss</td></tr>
+      <tr><td>11</td><td>STAN</td><td>n6</td><td>Idempotencia junto con DE 37</td></tr>
+      <tr><td>12 / 13</td><td>Hora / fecha local</td><td>n6 / n4</td><td>HHmmss / MMdd</td></tr>
+      <tr><td>37</td><td>RRN</td><td>an12</td><td>Referencia única; en 0420, la de la transacción original</td></tr>
+      <tr><td>38</td><td>Código de autorización</td><td>an6</td><td>Solo en aprobaciones</td></tr>
+      <tr><td>39</td><td>Código de respuesta</td><td>an2</td><td>Ver 3.4</td></tr>
+      <tr><td>41 / 42</td><td>Terminal / comercio</td><td>an8 / an15</td><td></td></tr>
+      <tr><td>49</td><td>Moneda</td><td>n3</td><td>320 (GTQ) por defecto; 840 (USD)</td></tr>
+      <tr><td>52</td><td>PIN block</td><td>an16 (hex)</td><td>ISO 9564 formato 0 (ver 3.5)</td></tr>
+      <tr><td>54</td><td>Saldos</td><td>LLLVAR</td><td>Ver 3.6</td></tr>
+      <tr><td>70</td><td>Código de gestión de red</td><td>n3</td><td>301 = echo test</td></tr>
+      <tr><td>90</td><td>Datos originales</td><td>an42</td><td>Reversas</td></tr>
+      <tr><td>102 / 103</td><td>Cuenta origen / destino</td><td>LLVAR</td><td>Transferencias usan DE 103</td></tr>
+    </tbody>
+  </table>
+
+  <h3>3.4 Códigos de respuesta (DE 39)</h3>
+  <table>
+    <thead><tr><th>DE 39</th><th>Significado</th><th>HTTP del Core</th><th>Origen</th></tr></thead>
+    <tbody>
+      <tr><td>00</td><td>Aprobada</td><td>200</td><td>Core</td></tr>
+      <tr><td>05</td><td>Tarjeta bloqueada / no honrar</td><td>403</td><td>Core</td></tr>
+      <tr><td>12</td><td>Transacción inválida</td><td>400</td><td>Recolector o Core</td></tr>
+      <tr><td>13</td><td>Monto inválido</td><td>400</td><td>Core</td></tr>
+      <tr><td>14</td><td>Cuenta o tarjeta inexistente</td><td>404</td><td>Core</td></tr>
+      <tr><td>25</td><td>Transacción original no encontrada</td><td>404</td><td>Core (reversa)</td></tr>
+      <tr><td>30</td><td>Error de formato</td><td>400</td><td>Recolector (trama) o Core (JSON)</td></tr>
+      <tr><td>51</td><td>Fondos insuficientes</td><td>422</td><td>Core</td></tr>
+      <tr><td>54</td><td>Tarjeta expirada</td><td>410</td><td>Core</td></tr>
+      <tr><td>55</td><td>PIN incorrecto o ausente</td><td>403</td><td>Core</td></tr>
+      <tr><td>61</td><td>Excede el límite diario</td><td>429</td><td>Core</td></tr>
+      <tr><td>68</td><td>Tiempo de espera agotado</td><td>—</td><td>Recolector</td></tr>
+      <tr><td>75</td><td>Intentos de PIN excedidos (la tarjeta se bloquea)</td><td>403</td><td>Core</td></tr>
+      <tr><td>91</td><td>Emisor no disponible</td><td>5xx o sin conexión</td><td>Recolector</td></tr>
+      <tr><td>96</td><td>Error del sistema</td><td>—</td><td>Recolector</td></tr>
+    </tbody>
+  </table>
+  <p>Si el Core responde con cuerpo JSON, el Recolector usa su <code>codigoRespuesta</code>. Sin cuerpo, traduce el estado
+    HTTP: 400 → 30, 403/423 → 05, 404 → 14, 410 → 54, 422 → 51, 429 → 61, 408/504 → 68, 500/502/503 → 91, otros → 96.</p>
+
+  <h3>3.5 PIN block (DE 52)</h3>
+<pre>PIN 1234, PAN 4532000000000001
+bloque PIN = 0 | longitud | PIN | relleno F                -> 041234FFFFFFFFFF
+bloque PAN = 0000 | 12 dígitos del PAN sin el verificador  -> 0000200000000000
+DE 52      = bloque PIN XOR bloque PAN                     -> 041214FFFFFFFFFF</pre>
+  <p>El Core recupera el PIN con el PAN de la cuenta y lo compara en tiempo constante con <code>SHA-256("numeroCuenta:PIN")</code>.
+    El bloque viaja sin cifrar bajo una ZPK porque el sistema no incluye un HSM.</p>
+
+  <h3>3.6 Saldos (DE 54)</h3>
+  <p>Dos bloques de 20 caracteres: tipo de cuenta (<code>10</code>), tipo de monto (<code>01</code> contable,
+    <code>02</code> disponible), moneda, signo (<code>C</code>/<code>D</code>) y 12 dígitos en centavos.
+    Ejemplo con Q1,400.00: <code>1001320C000000140000</code> + <code>1002320C000000140000</code>.</p>
+</section>
+
+<section class="capitulo">
+  <h3 style="margin-top:0">3.7 Ejemplo real: retiro de Q100 aprobado</h3>
+  <p>Trama de solicitud (sin el prefijo de longitud):</p>
+<pre>ISO0150000500200F238000008809000000000000400000016453200000000000101000000000001000010271447200001231447201027262710000123ATMNX001320041214FFFFFFFFFF141001-2002-3001</pre>
+  <table class="trama">
+    <thead><tr><th>Parte</th><th>Valor</th><th>Significado</th></tr></thead>
+    <tbody>
+      <tr><td>Cabecera</td><td><code>ISO015000050</code></td><td>Cabecera ISO (12 caracteres)</td></tr>
+      <tr><td>MTI</td><td><code>0200</code></td><td>Solicitud financiera</td></tr>
+      <tr><td>Bitmaps</td><td><code>F238000008809000</code> <code>0000000004000000</code></td><td>Campos 1, 2, 3, 4, 7, 11, 12, 13, 37, 41, 49, 52 y 102</td></tr>
+      <tr><td>DE 2</td><td><code>16 4532000000000001</code></td><td>PAN (LLVAR)</td></tr>
+      <tr><td>DE 3</td><td><code>010000</code></td><td>Retiro</td></tr>
+      <tr><td>DE 4</td><td><code>000000010000</code></td><td>Q100.00</td></tr>
+      <tr><td>DE 7 / 11 / 12 / 13</td><td><code>1027144720</code> <code>000123</code> <code>144720</code> <code>1027</code></td><td>Fecha y hora, STAN, hora y fecha local</td></tr>
+      <tr><td>DE 37</td><td><code>262710000123</code></td><td>RRN</td></tr>
+      <tr><td>DE 41 / 49</td><td><code>ATMNX001</code> <code>320</code></td><td>Terminal y moneda</td></tr>
+      <tr><td>DE 52</td><td><code>041214FFFFFFFFFF</code></td><td>PIN block</td></tr>
+      <tr><td>DE 102</td><td><code>14 1001-2002-3001</code></td><td>Cuenta (LLVAR)</td></tr>
+    </tbody>
+  </table>
+  <p>Trama de respuesta:</p>
+<pre>ISO0150000500210F23800000E80840000000000040000001645320000000000010100000000000100001027144720000123144720102726271000012310001000ATMNX0013200401001320C0000001400001002320C000000140000141001-2002-3001</pre>
+  <table class="trama">
+    <thead><tr><th>Parte</th><th>Valor</th><th>Significado</th></tr></thead>
+    <tbody>
+      <tr><td>MTI</td><td><code>0210</code></td><td>Respuesta financiera</td></tr>
+      <tr><td>Bitmap primario</td><td><code>F23800000E808400</code></td><td>Agrega 38, 39 y 54; sin 52</td></tr>
+      <tr><td>DE 38</td><td><code>100010</code></td><td>Código de autorización</td></tr>
+      <tr><td>DE 39</td><td><code>00</code></td><td>Aprobada</td></tr>
+      <tr><td>DE 54</td><td><code>040 1001320C000000140000 1002320C000000140000</code></td><td>Saldo contable y disponible: Q1,400.00</td></tr>
+    </tbody>
+  </table>
+  <p>El simulador (<code>/api/iso/simular</code>) devuelve estas mismas tramas con el PAN y el PIN block enmascarados.</p>
+</section>
+
+<!-- ============================================================ 4 -->
+<section class="capitulo">
+  <h2>4. Core Bancario y modelo de datos</h2>
+  <p>El esquema lo crea <code>init_sqlserver.sql</code> (la aplicación no modifica el esquema: <code>ddl-auto: none</code>).
+    El script es idempotente: crea lo que falta sin borrar datos, activa <code>READ_COMMITTED_SNAPSHOT</code>, crea
+    índices y carga las cinco cuentas de demostración; si encuentra una columna <code>pin</code> en claro la convierte a
+    <code>pin_hash</code> y la elimina.</p>
+<pre>CREATE TABLE dbo.cuentas (
+    id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    numero_cuenta VARCHAR(30) NOT NULL,          -- índice único idx_cuenta_num
+    pan VARCHAR(19) NOT NULL,                    -- índice idx_cuenta_pan
+    titular VARCHAR(100) NOT NULL,
+    saldo_disponible DECIMAL(15,2) NOT NULL,
+    saldo_contable DECIMAL(15,2) NOT NULL,
+    limite_diario DECIMAL(15,2) NOT NULL DEFAULT 500.00,
+    retirado_hoy DECIMAL(15,2) NOT NULL DEFAULT 0.00,
+    fecha_ultimo_retiro DATE NULL,
+    estado VARCHAR(20) NOT NULL DEFAULT 'ACTIVE', -- ACTIVE, BLOCKED, EXPIRED
+    pin_hash VARCHAR(64) NULL,                   -- SHA-256 de 'numero_cuenta:PIN' en hexadecimal
+    intentos_pin_fallidos INT NOT NULL DEFAULT 0,
+    banco VARCHAR(60) NULL
+);
+
+CREATE TABLE dbo.transacciones (
+    id BIGINT IDENTITY(1,1) NOT NULL PRIMARY KEY,
+    rrn VARCHAR(12) NOT NULL,                    -- UNIQUE (rrn, stan): uk_tx_rrn_stan
+    stan VARCHAR(6) NOT NULL,
+    numero_cuenta VARCHAR(30) NOT NULL,          -- índice idx_tx_cuenta
+    cuenta_destino VARCHAR(30) NULL,
+    monto DECIMAL(15,2) NOT NULL,
+    tipo_operacion VARCHAR(20) NOT NULL,         -- COMPRA, RETIRO, CONSULTA, TRANSFERENCIA, DEVOLUCION, REVERSA
+    saldo_anterior DECIMAL(15,2) NULL,
+    saldo_posterior DECIMAL(15,2) NULL,
+    codigo_respuesta VARCHAR(2) NOT NULL,        -- DE 39
+    codigo_autorizacion VARCHAR(6) NULL,         -- DE 38
+    terminal_id VARCHAR(30) NULL,
+    fecha_hora DATETIME2 NOT NULL DEFAULT SYSDATETIME()
+);</pre>
+
+  <h3>Reglas de negocio</h3>
+  <ol>
+    <li><strong>Bloqueo:</strong> la cuenta se lee con bloqueo pesimista (<code>UPDLOCK, HOLDLOCK, ROWLOCK</code>); en
+      transferencias se bloquean ambas cuentas en orden de id para evitar interbloqueos.</li>
+    <li><strong>Validaciones, en orden:</strong> cuenta existente y, si viene el PAN, que corresponda a la cuenta (14) → estado bloqueado (05) o expirado (54) → PIN, obligatorio
+      en retiro, consulta y transferencia y verificado siempre que venga (55; al tercer fallo 75 y la cuenta pasa a BLOCKED)
+      → monto mayor que cero (13) → límite diario de retiro (61) → saldo (51).</li>
+    <li><strong>Aplicación:</strong> débito o crédito de los saldos disponible y contable, acumulado diario de retiros y
+      registro de la transacción (también las rechazadas) en la misma transacción de BD.</li>
+    <li><strong>Idempotencia:</strong> si el par (RRN, STAN) ya existe, la inserción falla, todo se revierte y se devuelve la
+      respuesta original.</li>
+    <li><strong>Reversa:</strong> busca la transacción original aprobada por RRN, acredita su monto (y descuenta el acumulado
+      diario si era retiro) una sola vez; si no existe responde 25.</li>
+    <li><strong>Autorización:</strong> códigos secuenciales de 6 dígitos.</li>
+    <li><strong>Reset de demostración</strong> (<code>POST /api/core/reset</code>): borra las transacciones, reinicia acumulados e
+      intentos de todas las cuentas y devuelve las cinco cuentas semilla a su saldo, límite, estado y PIN iniciales.</li>
+  </ol>
+</section>
+
+<!-- ============================================================ 5 -->
+<section class="capitulo">
+  <h2>5. API REST</h2>
+  <p>Base: <code>http://localhost:8087</code>. Todas las respuestas son JSON. La colección <code>postman_collection.json</code>
+    contiene una petición con pruebas automáticas para cada caso.</p>
+  <table>
+    <thead><tr><th>Método</th><th>Ruta</th><th>Acceso</th><th>Descripción</th></tr></thead>
+    <tbody>
+      <tr><td>POST</td><td><code>/api/iso/simular</code></td><td>Público</td><td>Arma una trama, la procesa con el flujo del Recolector y devuelve tramas, bitmap y DE 39</td></tr>
+      <tr><td>GET</td><td><code>/api/iso/metricas</code></td><td>Público</td><td>Contadores del switch, estado del socket, memoria y GC</td></tr>
+      <tr><td>POST</td><td><code>/api/iso/rafaga?cantidad=50</code></td><td>Público</td><td>Ráfaga de consultas concurrentes en Virtual Threads (entre 5 y 200)</td></tr>
+      <tr><td>POST</td><td><code>/api/core/transacciones</code></td><td>API Key o ADMIN</td><td>Contrato Recolector → Core</td></tr>
+      <tr><td>GET</td><td><code>/api/core/transacciones?limite=200</code></td><td>Público</td><td>Historial (más recientes primero)</td></tr>
+      <tr><td>GET</td><td><code>/api/core/cuentas</code></td><td>Público</td><td>Lista de cuentas (sin PIN)</td></tr>
+      <tr><td>GET</td><td><code>/api/core/cuentas/{cuenta o PAN}</code></td><td>Público</td><td>Una cuenta</td></tr>
+      <tr><td>GET</td><td><code>/api/core/cuentas/{id}/transacciones?limite=50</code></td><td>Público</td><td>Movimientos de una cuenta</td></tr>
+      <tr><td>POST</td><td><code>/api/core/cuentas</code></td><td>ADMIN</td><td>Alta (201; 409 si la cuenta o el PAN existen)</td></tr>
+      <tr><td>PUT</td><td><code>/api/core/cuentas/{id}</code></td><td>ADMIN</td><td>Edición; <code>pin</code> omitido conserva el PIN</td></tr>
+      <tr><td>DELETE</td><td><code>/api/core/cuentas/{id}</code></td><td>ADMIN</td><td>Baja (204 / 404)</td></tr>
+      <tr><td>POST</td><td><code>/api/core/cuentas/{id}/recargar?monto=500</code></td><td>ADMIN</td><td>Depósito</td></tr>
+      <tr><td>POST</td><td><code>/api/core/cuentas/{id}/toggle-bloqueo</code></td><td>ADMIN</td><td>Bloquear / desbloquear</td></tr>
+      <tr><td>POST</td><td><code>/api/core/reset</code></td><td>ADMIN</td><td>Restaurar datos de demostración</td></tr>
+      <tr><td>GET</td><td><code>/api/core/admin/sesion</code></td><td>ADMIN</td><td>Verifica credenciales (login de la interfaz)</td></tr>
+      <tr><td>GET</td><td><code>/actuator/health</code>, <code>/actuator/info</code></td><td>Público</td><td>Salud (incluye <code>tcpIso</code> y <code>db</code>)</td></tr>
+      <tr><td>GET</td><td><code>/actuator/metrics/**</code></td><td>ADMIN</td><td>Métricas de Micrometer</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Simulador: <code>POST /api/iso/simular</code></h3>
+<pre>{ "mti": "0200", "pan": "4532000000000001", "cuenta": "1001-2002-3001", "monto": 100.00,
+  "processingCode": "010000", "terminalId": "ATMNX001", "stan": "000123", "rrn": "262710000123",
+  "moneda": "GTQ", "pin": "1234" }</pre>
+  <p>Campos opcionales: <code>pan</code> (se busca por la cuenta), <code>stan</code> y <code>rrn</code> (se generan),
+    <code>pin</code>, <code>cuentaDestino</code> (transferencias) y <code>moneda</code> (<code>GTQ</code> o <code>USD</code>).
+    En una reversa 0420, <code>rrn</code> es el de la transacción original. Respuesta (resumen):</p>
+<pre>{ "exitosa": true, "mtiSolicitud": "0200", "mtiRespuesta": "0210",
+  "codigoRespuestaIso": "00", "descripcionCodigo": "00 - Aprobado Exitosamente", "codigoAutorizacion": "100010",
+  "panEnmascarado": "453200******0001", "titular": "CARLOS PEREZ", "bancoEmisor": "BANCO INDUSTRIAL",
+  "monto": 100.0, "saldoDisponible": 1400.0, "saldoContable": 1400.0, "rrn": "262710000123", "stan": "000123",
+  "latenciaMs": 33, "bitmapHex": "F2380000088090000000000004000000",
+  "bitsActivos": [1, 2, 3, 4, 7, 11, 12, 13, 37, 41, 49, 52, 102],
+  "rawRequestAscii": "...", "rawResponseAscii": "...", "dataElementsEnviados": {...}, "dataElementsRecibidos": {...} }</pre>
+
+  <h3>Contrato Recolector → Core: <code>POST /api/core/transacciones</code></h3>
+<pre>POST /api/core/transacciones
+X-API-Key: nexus-core-api-key-desarrollo
+{ "rrn": "262710000124", "stan": "000124", "cuentaOrigen": "1001-2002-3002", "monto": 25.00,
+  "tipoOperacion": "COMPRA", "terminalId": "POS00001", "codigoProcesamiento": "000000" }
+
+HTTP 200
+{ "exitosa": true, "codigoRespuesta": "00", "codigoAutorizacion": "100011", "saldoDisponible": 325.00,
+  "saldoContable": 325.00, "mensaje": "Transacción Aprobada Exitosamente", "rrn": "262710000124", ... }
+
+HTTP 422 (otra transacción, cuenta con Q10.00 y monto Q50.00)
+{ "exitosa": false, "codigoRespuesta": "51", "codigoAutorizacion": null, "saldoDisponible": 10.00,
+  "mensaje": "Fondos insuficientes", "rrn": "262710000125", ... }</pre>
+  <p>Campos: <code>rrn</code> (obligatorio, máx. 12), <code>stan</code> (obligatorio, máx. 6), <code>cuentaOrigen</code> o
+    <code>pan</code> (uno obligatorio), <code>cuentaDestino</code>, <code>monto</code>, <code>tipoOperacion</code> (COMPRA,
+    RETIRO, DEVOLUCION, CONSULTA, TRANSFERENCIA, REVERSA), <code>terminalId</code>, <code>codigoProcesamiento</code> y
+    <code>pinBlock</code> (16 hexadecimales). Un cuerpo inválido responde 400 con <code>codigoRespuesta</code> = <code>30</code>.</p>
+
+  <h3>Errores de administración</h3>
+<pre>POST /api/core/cuentas  (número de cuenta repetido)   -> 409 {"error":"Ya existe una cuenta con el número: 1001-2002-3001"}
+POST /api/core/cuentas  (pin "12")                    -> 400 {"error":"El PIN debe tener exactamente 4 dígitos"}
+Cualquier ruta ADMIN sin credenciales válidas          -> 401 (sin cabecera WWW-Authenticate)</pre>
+</section>
+
+<!-- ============================================================ 6 -->
+<section class="seccion">
+  <h2>6. Seguridad</h2>
+  <table>
+    <thead><tr><th>Elemento</th><th>Control</th></tr></thead>
+    <tbody>
+      <tr><td>Transacciones del Core</td><td>Solo el Recolector (cabecera <code>X-API-Key</code>, comparación en tiempo constante) o un administrador.</td></tr>
+      <tr><td>Administración y métricas</td><td>Rol ADMIN con HTTP Basic. Usuario y contraseña por variables de entorno; contraseña con BCrypt, calculada en el primer login.</td></tr>
+      <tr><td>Consultas y simulador</td><td>Públicos (no exponen PIN ni hash).</td></tr>
+      <tr><td>PIN</td><td>Hash SHA-256 en BD; PIN block en la trama; eliminado de respuestas y enmascarado en el simulador; 3 intentos fallidos bloquean la tarjeta.</td></tr>
+      <tr><td>Sesión</td><td>API sin estado (sin cookies), por eso CSRF no aplica. La interfaz guarda las credenciales solo en memoria de la pestaña y cierra la sesión ante un 401.</td></tr>
+      <tr><td>Trama TCP</td><td>Tamaño máximo de 8 KB; tramas ilegibles responden 30 sin afectar la conexión.</td></tr>
+      <tr><td>Contenedor</td><td>Distroless sin shell ni gestor de paquetes, usuario <code>nonroot</code> (65532), solo el binario.</td></tr>
+    </tbody>
+  </table>
+  <div class="aviso">Para producción faltaría: cifrar el PIN block bajo una ZPK y verificarlo en un HSM, TLS (o mTLS) en el
+    socket TCP y en HTTP, y gestionar las credenciales con un almacén de secretos en lugar de <code>.env</code>.</div>
+</section>
+
+<!-- ============================================================ 7 -->
+<section class="capitulo">
+  <h2>7. Configuración</h2>
+  <h3>7.1 <code>application.yaml</code></h3>
+  <table>
+    <thead><tr><th>Propiedad</th><th>Valor por defecto</th><th>Descripción</th></tr></thead>
+    <tbody>
+      <tr><td><code>server.port</code></td><td>8087</td><td>Puerto HTTP (variable <code>SERVER_PORT</code>)</td></tr>
+      <tr><td><code>spring.datasource.url</code></td><td>jdbc:sqlserver://127.0.0.1:1434; databaseName=CoreBancario5B; …</td><td>Conexión (variable <code>SPRING_DATASOURCE_URL</code>); incluye <code>sendStringParametersAsUnicode=false</code></td></tr>
+      <tr><td><code>spring.datasource.username / password</code></td><td>sa / admin</td><td>Credenciales (variables <code>SPRING_DATASOURCE_USERNAME</code> / <code>_PASSWORD</code>)</td></tr>
+      <tr><td><code>spring.datasource.hikari.maximum-pool-size</code></td><td>20</td><td>Conexiones JDBC</td></tr>
+      <tr><td><code>spring.threads.virtual.enabled</code></td><td>true</td><td>Virtual Threads en Tomcat y tareas</td></tr>
+      <tr><td><code>recolector.tcp.port</code></td><td>15000</td><td>Puerto del socket ISO 8583</td></tr>
+      <tr><td><code>recolector.tcp.timeout-ms</code></td><td>30000</td><td>Cierre de conexiones inactivas</td></tr>
+      <tr><td><code>recolector.tcp.max-frame-bytes</code></td><td>8192</td><td>Tamaño máximo de trama</td></tr>
+      <tr><td><code>recolector.tcp.backlog</code></td><td>2048</td><td>Cola de conexiones pendientes</td></tr>
+      <tr><td><code>recolector.iso.moneda</code></td><td>320</td><td>Moneda por defecto (DE 49)</td></tr>
+      <tr><td><code>recolector.corebancario.url</code></td><td>http://localhost:${server.port}/api/core</td><td>URL del Core</td></tr>
+      <tr><td><code>recolector.corebancario.connect-timeout-ms / read-timeout-ms</code></td><td>2000 / 5000</td><td>Tiempos de espera hacia el Core</td></tr>
+      <tr><td><code>recolector.corebancario.reintentos / espera-reintento-ms</code></td><td>2 / 100</td><td>Reintentos con espera exponencial</td></tr>
+      <tr><td><code>recolector.seguridad.api-key</code></td><td>${CORE_API_KEY}</td><td>API Key del Recolector</td></tr>
+      <tr><td><code>recolector.seguridad.admin-usuario / admin-clave</code></td><td>${ADMIN_USER} / ${ADMIN_PASSWORD}</td><td>Administrador</td></tr>
+      <tr><td><code>recolector.idempotencia.ttl-minutes / max-entries</code></td><td>60 / 50000</td><td>Caché de respuestas por RRN y STAN</td></tr>
+    </tbody>
+  </table>
+
+  <h3>7.2 Variables de <code>.env</code> (Docker Compose)</h3>
+  <table>
+    <thead><tr><th>Variable</th><th>Por defecto</th><th>Uso</th></tr></thead>
+    <tbody>
+      <tr><td><code>MSSQL_SA_PASSWORD</code></td><td>Nexus2026_Pass</td><td>Contraseña de <code>sa</code> (se fija al crear el volumen)</td></tr>
+      <tr><td><code>APP_DOCKERFILE</code></td><td>Dockerfile</td><td><code>Dockerfile</code> (nativo) o <code>Dockerfile.jvm</code></td></tr>
+      <tr><td><code>ADMIN_USER</code> / <code>ADMIN_PASSWORD</code></td><td>admin / Nexus2026_Admin</td><td>Administrador</td></tr>
+      <tr><td><code>CORE_API_KEY</code></td><td>nexus-core-api-key-desarrollo</td><td>API Key del Recolector</td></tr>
+      <tr><td><code>APP_HTTP_PORT</code> / <code>APP_TCP_PORT</code> / <code>SQLSERVER_PORT</code></td><td>8087 / 15000 / 14333</td><td>Puertos publicados</td></tr>
+      <tr><td><code>CARGA_TERMINALES</code> / <code>CARGA_DURACION</code></td><td>200 / 60</td><td>Prueba de carga</td></tr>
+      <tr><td><code>TZ</code></td><td>America/Guatemala</td><td>Zona horaria de los contenedores</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 8 -->
+<section class="capitulo">
+  <h2>8. Despliegue</h2>
+  <h3>8.1 Docker Compose (recomendado)</h3>
+  <p>Requisitos: Docker Desktop (WSL 2 en Windows) con al menos 8 GB de memoria para la compilación nativa.</p>
+<pre>docker compose up -d --build                      # SQL Server + creación de la BD + aplicación
+docker compose ps                                 # cajero-app debe quedar "healthy"
+docker compose logs -f app                        # registros (incluye el tiempo de arranque)
+docker compose --profile tests run --rm tests     # pruebas + cobertura en reportes/jacoco
+docker compose --profile carga run --rm jmeter    # prueba de carga, reporte en reportes/jmeter/html
+docker compose down                               # detener (conserva datos)
+docker compose down -v                            # detener y borrar la base de datos</pre>
+  <table>
+    <thead><tr><th>Servicio</th><th>Imagen</th><th>Función</th></tr></thead>
+    <tbody>
+      <tr><td><code>sqlserver</code></td><td>mcr.microsoft.com/mssql/server:2022-latest</td><td>Base de datos (volumen <code>sqlserver-data</code>)</td></tr>
+      <tr><td><code>db-init</code></td><td>la misma</td><td>Crea <code>CoreBancario5B</code> y ejecuta <code>init_sqlserver.sql</code>; termina con código 0</td></tr>
+      <tr><td><code>app</code></td><td>construida con <code>Dockerfile</code> o <code>Dockerfile.jvm</code></td><td>Aplicación; arranca cuando <code>db-init</code> terminó bien</td></tr>
+      <tr><td><code>tests</code> (perfil)</td><td>etapa <code>test</code> del Dockerfile</td><td><code>mvn verify</code> sobre H2</td></tr>
+      <tr><td><code>jmeter</code> (perfil)</td><td><code>Dockerfile.jmeter</code></td><td>JMeter 5.6.3 sobre Java 21</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.2 Imágenes</h3>
+  <ul>
+    <li><strong><code>Dockerfile</code> (nativo):</strong> etapa <code>deps</code> sobre <code>ghcr.io/graalvm/native-image-community:25</code>
+      con Maven; etapa <code>build</code> con <code>mvn -Pnative -DskipTests package</code>; imagen final
+      <code>gcr.io/distroless/cc-debian12:nonroot</code> con solo <code>/app/recolector</code> y
+      <code>HEALTHCHECK ["/app/recolector", "--healthcheck"]</code>. Compilación de 5-10 minutos.</li>
+    <li><strong><code>Dockerfile.jvm</code>:</strong> Maven + Temurin 25 → <code>eclipse-temurin:25-jre</code> con
+      <code>-XX:+UseZGC -XX:MaxRAMPercentage=75</code>, usuario sin privilegios y el mismo modo <code>--healthcheck</code>.
+      Compilación de unos 2 minutos.</li>
+    <li>Opciones de la imagen nativa (perfil <code>native</code> del <code>pom.xml</code>): <code>--static-nolibc</code>,
+      <code>-march=compatibility</code>, <code>-H:+AddAllCharsets</code> (necesario para el driver de SQL Server) y
+      <code>--enable-monitoring=heapdump,jfr</code>.</li>
+  </ul>
+
+  <h3>8.3 Ejecución local sin Docker</h3>
+  <p>Requisitos: JDK 25, Maven 3.9 y SQL Server con la base creada por <code>init_sqlserver.sql</code>.</p>
+<pre>mvn spring-boot:run                        # JVM (conexión por defecto 127.0.0.1:1434, sa/admin)
+mvn verify                                 # pruebas y verificación de cobertura (H2, sin SQL Server)
+mvn -Pnative -DskipTests package           # binario nativo target/recolector (GraalVM 25)</pre>
+</section>
+
+<!-- ============================================================ 9 -->
+<section class="seccion">
+  <h2>9. Operación y monitoreo</h2>
+  <h3>Salud</h3>
+<pre>GET /actuator/health
+{"status":"UP","components":{"db":{"status":"UP"},"tcpIso":{"status":"UP"},"diskSpace":{...},"ping":{...},...}}</pre>
+  <p>Con credenciales de administrador, <code>tcpIso</code> incluye el puerto y las conexiones abiertas. El contenedor
+    usa el mismo endpoint en su HEALTHCHECK.</p>
+  <h3>Métricas del switch</h3>
+<pre>GET /api/iso/metricas
+{"transaccionesProcesadas":5,"transaccionesAprobadas":4,"transaccionesRechazadas":1,"tramasConErrorFormato":0,
+ "tcpPuerto":15000,"tcpEstado":"ACTIVO (Listening)","tcpConexionesAbiertas":0,
+ "modoConcurrencia":"Virtual Threads (Project Loom)","recolectorBasura":"ZGC ...","memoriaRssMb":964,...}</pre>
+  <p><code>/actuator/metrics</code> (ADMIN) expone las métricas de Micrometer; en modo JVM, <code>jvm.gc.pause</code> muestra
+    las pausas de ZGC. El binario nativo usa Serial GC y no publica esa métrica.</p>
+  <h3>Registros</h3>
+  <ul>
+    <li>Arranque: <code>Started RecolectorApplication in X seconds</code> y un resumen con los puertos.</li>
+    <li>Advertencias de negocio: tramas ilegibles, MTI no soportados, bloqueo de tarjeta por intentos de PIN, Core no disponible.</li>
+    <li>Nivel por paquete: <code>logging.level.com.banco.recolector</code> (por defecto INFO; DEBUG muestra cada trama sin datos sensibles).</li>
+  </ul>
+  <h3>Datos de demostración</h3>
+  <p><code>POST /api/core/reset</code> (o <strong>Restaurar datos</strong> en el panel) devuelve las cuentas semilla a su estado
+    inicial. <code>docker compose down -v</code> borra la base completa; el siguiente <code>up</code> la recrea.</p>
+</section>
+
+<!-- ============================================================ 10 -->
+<section class="capitulo">
+  <h2>10. Pruebas y calidad</h2>
+  <p>119 pruebas (JUnit 6, AssertJ, Mockito, MockMvc, WireMock 3) se ejecutan con <code>mvn verify</code> sobre H2 en modo
+    MSSQL. JaCoCo falla el build si la cobertura de líneas baja de 80 %; la última ejecución dio 96,7 % de líneas y 84,5 % de ramas.</p>
+  <table>
+    <thead><tr><th>Clase</th><th>Alcance</th></tr></thead>
+    <tbody>
+      <tr><td><code>IsoParserUnitTest</code></td><td>j8583: codificación, parseo, bitmaps, DE 54, tramas corruptas</td></tr>
+      <tr><td><code>PinBlockTest</code>, <code>IsoResponseCodeTest</code>, <code>TransaccionCoreRequestTest</code></td><td>PIN block, catálogo DE 39, tipo de operación</td></tr>
+      <tr><td><code>WireMockCoreBancarioIntegrationTest</code></td><td>RestClient: estados HTTP, reintentos, timeouts, caídas, API Key</td></tr>
+      <tr><td><code>RecolectorTransaccionalServiceTest</code>, <code>IdempotenciaServiceTest</code></td><td>Orquestación e idempotencia</td></tr>
+      <tr><td><code>CoreBancarioServiceIntegrationTest</code></td><td>Reglas de negocio y concurrencia real</td></tr>
+      <tr><td><code>CoreBancarioControllerIntegrationTest</code>, <code>IsoSimuladorControllerIntegrationTest</code></td><td>API, seguridad, validaciones, reset</td></tr>
+      <tr><td><code>RecolectorEndToEndTest</code></td><td>Socket TCP → Recolector → Core → BD</td></tr>
+      <tr><td><code>LoadTestSimulationTest</code></td><td>Carga por TCP con JFR: pausas de ZGC ≤ 1 ms y sin pinning</td></tr>
+      <tr><td><code>IsoAotRuntimeHintsTest</code></td><td>RuntimeHints de la imagen nativa</td></tr>
+    </tbody>
+  </table>
+  <h3>Prueba de carga</h3>
+  <p><code>src/test/resources/load-test-iso8583.jmx</code> crea una cuenta por terminal y envía retiros 0200 con PIN block
+    por conexiones TCP persistentes, verificando 0210 con DE 39 = 00. Se ejecuta con
+    <code>docker compose --profile carga run --rm jmeter</code> o con un JMeter local sobre Java 17/21. Los resultados
+    medidos y su metodología están en <code>DOCUMENTACION.md</code>.</p>
+</section>
+
+<!-- ============================================================ 11 -->
+<section class="seccion">
+  <h2>11. Solución de problemas</h2>
+  <table>
+    <thead><tr><th>Síntoma</th><th>Causa</th><th>Acción</th></tr></thead>
+    <tbody>
+      <tr><td><code>cajero-app</code> no pasa a <em>healthy</em></td><td>La BD no está lista o las credenciales no coinciden.</td><td><code>docker compose logs app</code>; revisar <code>MSSQL_SA_PASSWORD</code>; si se cambió después de crear el volumen, <code>docker compose down -v</code>.</td></tr>
+      <tr><td><code>cajero-db-init</code> termina con error</td><td>SQL Server no aceptó la conexión o el script falló.</td><td><code>docker compose logs db-init</code>.</td></tr>
+      <tr><td>La compilación nativa se interrumpe</td><td>Memoria insuficiente en Docker.</td><td>Asignar 8 GB o más a WSL 2, o usar <code>APP_DOCKERFILE=Dockerfile.jvm</code>.</td></tr>
+      <tr><td>"Port is already allocated"</td><td>Puerto ocupado en el equipo.</td><td>Cambiar <code>APP_HTTP_PORT</code>, <code>APP_TCP_PORT</code> o <code>SQLSERVER_PORT</code> en <code>.env</code>.</td></tr>
+      <tr><td>Todas las transacciones responden 91</td><td>El Recolector no alcanza al Core.</td><td>Revisar <code>recolector.corebancario.url</code> y que la app escuche en ese puerto.</td></tr>
+      <tr><td>Todas las transacciones responden 96</td><td>La API Key del Recolector no coincide con la del Core (el Core responde 401).</td><td>Usar el mismo <code>CORE_API_KEY</code>.</td></tr>
+      <tr><td>El binario nativo no conecta a SQL Server (codepage Cp1252)</td><td>Imagen compilada sin todos los charsets.</td><td>Compilar con el perfil <code>native</code> del <code>pom.xml</code> (incluye <code>-H:+AddAllCharsets</code>).</td></tr>
+      <tr><td>Los scripts de JMeter fallan con "Unsupported class file major version 69"</td><td>JMeter 5.6.3 ejecutado con Java 25.</td><td>Usar el servicio <code>jmeter</code> de Compose o Java 17/21 para JMeter.</td></tr>
+      <tr><td>401 en operaciones de administración</td><td>Credenciales distintas a <code>ADMIN_USER</code>/<code>ADMIN_PASSWORD</code>.</td><td>Revisar <code>.env</code> y reiniciar la app.</td></tr>
+    </tbody>
+  </table>
+  <p class="pie-doc">RED NEXUS • Manual Técnico • Recolector Transaccional ISO 8583 • Octubre de 2026</p>
+</section>
+
+</main>
+</body>
+</html>

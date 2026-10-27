@@ -1,0 +1,111 @@
+/* Estilo de impresión de los manuales (carta, márgenes de 18 mm). Abrir el HTML en Chrome/Edge -> Imprimir -> Guardar como PDF. */
+@page { size: Letter; margin: 18mm 16mm 20mm 16mm; }
+
+:root {
+  --tinta: #1b2333;
+  --suave: #5b6476;
+  --linea: #d9dee8;
+  --acento: #0e5aa7;
+  --acento-suave: #e8f1fb;
+  --aviso: #8a5a00;
+  --aviso-fondo: #fff6e0;
+  --peligro: #9b1c2c;
+  --peligro-fondo: #fdecee;
+  --ok: #17703c;
+  --ok-fondo: #e8f6ee;
+  --codigo-fondo: #f3f5f9;
+}
+
+* { box-sizing: border-box; }
+
+html { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+
+body {
+  margin: 0;
+  background: #ffffff;
+  color: var(--tinta);
+  font-family: "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 10.5pt;
+  line-height: 1.5;
+}
+
+main { max-width: 186mm; margin: 0 auto; }
+
+h1, h2, h3, h4 { color: #0f2747; line-height: 1.25; break-after: avoid; page-break-after: avoid; }
+h2 { font-size: 16pt; margin: 0 0 10px; padding-bottom: 6px; border-bottom: 2px solid var(--acento); }
+h3 { font-size: 12.5pt; margin: 18px 0 6px; }
+h4 { font-size: 11pt; margin: 14px 0 4px; }
+p { margin: 6px 0 8px; }
+ul, ol { margin: 6px 0 10px; padding-left: 22px; }
+li { margin: 2px 0; }
+a { color: var(--acento); text-decoration: none; }
+strong { color: #0f2747; }
+
+code, kbd, pre { font-family: "Cascadia Mono", Consolas, "DejaVu Sans Mono", monospace; font-size: 9pt; }
+code { background: var(--codigo-fondo); padding: 1px 4px; border-radius: 3px; }
+kbd {
+  display: inline-block; min-width: 18px; padding: 0 5px; text-align: center;
+  border: 1px solid #b7bfcc; border-bottom-width: 2px; border-radius: 4px; background: #f8f9fb; font-size: 8.5pt;
+}
+pre {
+  background: var(--codigo-fondo); border: 1px solid var(--linea); border-radius: 6px;
+  padding: 9px 11px; white-space: pre-wrap; word-break: break-word; margin: 8px 0 12px;
+  break-inside: avoid; page-break-inside: avoid;
+}
+
+table { width: 100%; border-collapse: collapse; margin: 8px 0 14px; font-size: 9.5pt; break-inside: auto; }
+thead { display: table-header-group; }
+tr { break-inside: avoid; page-break-inside: avoid; }
+th { background: #0f2747; color: #ffffff; text-align: left; font-weight: 600; padding: 6px 8px; }
+td { border-bottom: 1px solid var(--linea); padding: 5px 8px; vertical-align: top; overflow-wrap: anywhere; }
+tbody tr:nth-child(even) td { background: #f7f9fc; }
+
+/* Secciones: cada capítulo empieza en página nueva */
+section.capitulo { break-before: page; page-break-before: always; }
+
+/* Portada */
+.portada {
+  height: 238mm; display: flex; flex-direction: column; justify-content: space-between;
+  border: 1px solid var(--linea); border-radius: 10px; padding: 18mm 16mm;
+  background: linear-gradient(160deg, #0f2747 0%, #123a6b 55%, #0e5aa7 100%); color: #ffffff;
+}
+.portada .sello { font-size: 9pt; letter-spacing: 3px; text-transform: uppercase; opacity: .85; }
+.portada h1 { color: #ffffff; font-size: 30pt; margin: 10px 0 4px; }
+.portada .subtitulo { font-size: 14pt; opacity: .95; margin: 0 0 18px; }
+.portada .resumen { font-size: 11pt; max-width: 140mm; opacity: .92; }
+.portada table { color: #ffffff; font-size: 10pt; margin: 0; }
+.portada td { border-bottom: 1px solid rgba(255,255,255,.25); background: transparent !important; padding: 6px 4px; }
+.portada td:first-child { width: 45mm; opacity: .8; }
+
+/* Índice */
+.indice ol { columns: 2; column-gap: 12mm; padding-left: 18px; }
+.indice li { break-inside: avoid; }
+
+/* Figuras */
+figure { margin: 10px 0 14px; text-align: center; break-inside: avoid; page-break-inside: avoid; }
+figure img { max-width: 100%; max-height: 112mm; width: auto; height: auto; border: 1px solid var(--linea); border-radius: 6px; }
+figure.alta img { max-height: 112mm; }
+/* Capítulos cortos: continúan en la misma página */
+section.seccion { margin-top: 22px; }
+.par figure img { max-height: 100mm; }
+figure.media img { max-width: 62%; }
+figure.chica img { max-width: 46%; }
+figcaption { font-size: 8.8pt; color: var(--suave); margin-top: 4px; }
+.par { display: flex; gap: 10px; align-items: flex-start; break-inside: avoid; page-break-inside: avoid; }
+.par figure { flex: 1; margin: 6px 0; }
+
+/* Recuadros */
+.nota, .aviso, .peligro, .ok {
+  border-left: 4px solid; border-radius: 4px; padding: 7px 10px; margin: 10px 0; break-inside: avoid; page-break-inside: avoid;
+}
+.nota { border-color: var(--acento); background: var(--acento-suave); }
+.aviso { border-color: #d39b00; background: var(--aviso-fondo); }
+.peligro { border-color: var(--peligro); background: var(--peligro-fondo); }
+.ok { border-color: var(--ok); background: var(--ok-fondo); }
+
+.pie-doc { margin-top: 18px; font-size: 8.5pt; color: var(--suave); text-align: center; }
+
+@media screen {
+  body { background: #e9edf3; }
+  main { background: #ffffff; padding: 16mm; margin: 12px auto; box-shadow: 0 2px 12px rgba(0,0,0,.12); }
+}

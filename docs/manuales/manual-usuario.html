@@ -1,0 +1,583 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Manual de Usuario - Cajero Automático RED NEXUS</title>
+<link rel="stylesheet" href="estilo.css">
+</head>
+<body>
+<main>
+
+<!-- ============================================================ PORTADA -->
+<div class="portada">
+  <div>
+    <div class="sello">Manual de usuario</div>
+    <h1>RED NEXUS</h1>
+    <p class="subtitulo">Cajero automático multibanca y panel de administración</p>
+    <p class="resumen">Guía paso a paso para operar el cajero web del Recolector Transaccional ISO 8583:
+      inserción de tarjeta, PIN, retiros, consultas, reversas, estado de cuenta, y administración de
+      cuentas y tarjetas del Core Bancario.</p>
+  </div>
+  <table>
+    <tr><td>Sistema</td><td>Recolector Transaccional ISO 8583 + Core Bancario (SQL Server)</td></tr>
+    <tr><td>Terminal</td><td>ATM-NX-01 (identificador ISO <code style="background:transparent;color:#fff">ATMNX001</code>)</td></tr>
+    <tr><td>Dirección de acceso</td><td>http://localhost:8087</td></tr>
+    <tr><td>Moneda</td><td>Quetzales (GTQ, código ISO 4217 320)</td></tr>
+    <tr><td>Versión del sistema</td><td>1.0.0</td></tr>
+    <tr><td>Fecha</td><td>Octubre de 2026</td></tr>
+  </table>
+</div>
+
+<!-- ============================================================ ÍNDICE -->
+<section class="capitulo indice">
+  <h2>Contenido</h2>
+  <ol>
+    <li>Introducción y acceso</li>
+    <li>Partes del cajero y teclas</li>
+    <li>Cuentas de demostración</li>
+    <li>Insertar la tarjeta</li>
+    <li>Ingresar el PIN</li>
+    <li>Menú principal</li>
+    <li>Retiro de efectivo</li>
+    <li>Comprobante (recibo)</li>
+    <li>Consulta de saldo</li>
+    <li>Reversa del último retiro</li>
+    <li>Estado de cuenta</li>
+    <li>Seguridad del PIN, PIN incorrecto y bloqueo</li>
+    <li>Echo test de red</li>
+    <li>Mensajes de rechazo</li>
+    <li>Panel de administración: acceso</li>
+    <li>Gestión de cuentas y tarjetas</li>
+    <li>Historial de transacciones</li>
+    <li>Consola ISO 8583</li>
+    <li>Preguntas frecuentes y solución de problemas</li>
+  </ol>
+
+  <h3>Convenciones de este manual</h3>
+  <ul>
+    <li><kbd>F1</kbd>…<kbd>F8</kbd>: teclas de función del teclado de la computadora, equivalentes a los botones laterales del cajero.</li>
+    <li><strong>L1–L4 / R1–R4</strong>: botones laterales izquierdos y derechos de la pantalla del cajero, de arriba hacia abajo.</li>
+    <li><strong>DE 39</strong>: código de respuesta ISO 8583 que devuelve el banco (por ejemplo, <code>00</code> = aprobada).</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 1 -->
+<section class="capitulo">
+  <h2>1. Introducción y acceso</h2>
+  <p>El cajero RED NEXUS es la interfaz web del <strong>Recolector Transaccional ISO 8583</strong>. Cada operación que se
+    realiza en el cajero se convierte en una trama ISO 8583 (por ejemplo, un retiro es un mensaje <strong>0200</strong>),
+    viaja al Recolector, que consulta al <strong>Core Bancario</strong> y devuelve la respuesta del banco
+    (mensaje <strong>0210</strong> con el código <strong>DE 39</strong>). Los saldos y movimientos se guardan en SQL Server.</p>
+
+  <h3>Requisitos</h3>
+  <ul>
+    <li>El sistema en ejecución (con Docker: <code>docker compose up -d --build</code>; ver el README del proyecto).</li>
+    <li>Un navegador actualizado (Chrome, Edge o Firefox).</li>
+  </ul>
+
+  <h3>Acceso</h3>
+  <ol>
+    <li>Abra <strong>http://localhost:8087</strong> en el navegador (si cambió el puerto en el archivo <code>.env</code>, use ese).</li>
+    <li>Aparece el cajero en la pantalla de bienvenida. No se necesita iniciar sesión para usar el cajero.</li>
+    <li>El panel de administración requiere usuario y contraseña (capítulo 15).</li>
+  </ol>
+
+  <div class="nota">El cajero es un simulador: no entrega dinero real. Las cuentas, saldos y movimientos son datos de
+    demostración guardados en la base de datos <code>CoreBancario5B</code>.</div>
+</section>
+
+<!-- ============================================================ 2 -->
+<section class="capitulo">
+  <h2>2. Partes del cajero y teclas</h2>
+  <div class="par">
+    <figure>
+      <img src="img/01-cajero-bienvenida.jpg" alt="Cajero en la pantalla de bienvenida">
+      <figcaption>Figura 1. Cajero en la pantalla de bienvenida.</figcaption>
+    </figure>
+    <div style="flex:1.15">
+      <ol>
+        <li><strong>Marquesina:</strong> nombre y logotipo del banco de la tarjeta insertada (RED NEXUS cuando no hay tarjeta) y la hora.</li>
+        <li><strong>Pantalla con botones laterales:</strong> cuatro botones a cada lado (L1–L4 y R1–R4). Cada opción de la pantalla está alineada con su botón.</li>
+        <li><strong>Inserción de tarjeta:</strong> al hacer clic se abre la billetera de tarjetas; con una tarjeta dentro, el mismo control la expulsa.</li>
+        <li><strong>Impresora de recibo:</strong> muestra el comprobante de la última operación.</li>
+        <li><strong>Entrega de efectivo:</strong> se ilumina cuando un retiro es aprobado (billetes de Q100 y Q200).</li>
+        <li><strong>Teclado (PIN pad):</strong> dígitos <kbd>0</kbd>–<kbd>9</kbd>, <strong>CANCELAR</strong>, <strong>BORRAR</strong> y <strong>ENTRAR</strong>.</li>
+      </ol>
+    </div>
+  </div>
+
+  <h3>Teclas de la computadora</h3>
+  <p>Con una tarjeta insertada, el teclado de la computadora funciona igual que el del cajero:</p>
+  <table>
+    <thead><tr><th>Tecla</th><th>Equivale a</th><th>Uso</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>F1</kbd> <kbd>F2</kbd> <kbd>F3</kbd> <kbd>F4</kbd></td><td>Botones L1, L2, L3, L4</td><td>Opciones del lado izquierdo de la pantalla</td></tr>
+      <tr><td><kbd>F5</kbd> <kbd>F6</kbd> <kbd>F7</kbd> <kbd>F8</kbd></td><td>Botones R1, R2, R3, R4</td><td>Opciones del lado derecho de la pantalla</td></tr>
+      <tr><td><kbd>1</kbd>…<kbd>8</kbd></td><td>Opciones 1 a 8</td><td>En el menú principal y en el menú de retiro</td></tr>
+      <tr><td><kbd>0</kbd>…<kbd>9</kbd></td><td>Teclado numérico</td><td>PIN y monto en "Otra cantidad"</td></tr>
+      <tr><td><kbd>Enter</kbd></td><td>ENTRAR</td><td>Confirmar; en pantallas de resultado, volver al menú</td></tr>
+      <tr><td><kbd>Retroceso</kbd></td><td>BORRAR</td><td>Borrar el último dígito</td></tr>
+      <tr><td><kbd>Supr</kbd></td><td>—</td><td>Borrar todos los dígitos escritos</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>CANCELAR</td><td>Cancelar / expulsar la tarjeta; cerrar ventanas</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 3 -->
+<section class="capitulo">
+  <h2>3. Cuentas de demostración</h2>
+  <p>El sistema se entrega con cinco cuentas de prueba. Cada una tiene un estado distinto para poder demostrar
+    aprobaciones y rechazos:</p>
+  <table>
+    <thead><tr><th>Cuenta</th><th>Tarjeta (PAN)</th><th>Titular</th><th>Banco</th><th>Saldo</th><th>Límite diario</th><th>Estado</th><th>PIN</th></tr></thead>
+    <tbody>
+      <tr><td>1001-2002-3001</td><td>4532 •••• 0001</td><td>Carlos Pérez</td><td>Banco Industrial</td><td>Q1,500.00</td><td>Q500.00</td><td>Activa</td><td>1234</td></tr>
+      <tr><td>1001-2002-3002</td><td>5412 •••• 0002</td><td>María Gómez</td><td>G&amp;T Continental</td><td>Q350.00</td><td>Q300.00</td><td>Activa</td><td>4321</td></tr>
+      <tr><td>1001-2002-3003</td><td>4000 •••• 0003</td><td>Juan López</td><td>Banrural</td><td>Q500.00</td><td>Q200.00</td><td>Expirada</td><td>2222</td></tr>
+      <tr><td>1001-2002-3004</td><td>4000 •••• 0004</td><td>Ana Morales</td><td>BAC Credomatic</td><td>Q1,000.00</td><td>Q500.00</td><td>Bloqueada</td><td>9999</td></tr>
+      <tr><td>1001-2002-3005</td><td>4000 •••• 0005</td><td>Pedro Ramos</td><td>Banco Promerica</td><td>Q10.00</td><td>Q100.00</td><td>Activa</td><td>1111</td></tr>
+    </tbody>
+  </table>
+  <ul>
+    <li><strong>Carlos Pérez</strong> y <strong>María Gómez</strong>: operaciones aprobadas.</li>
+    <li><strong>Juan López</strong>: tarjeta expirada (rechazo <code>54</code>).</li>
+    <li><strong>Ana Morales</strong>: tarjeta bloqueada (rechazo <code>05</code>).</li>
+    <li><strong>Pedro Ramos</strong>: saldo bajo para probar fondos insuficientes (<code>51</code>) y límite diario (<code>61</code>).</li>
+  </ul>
+  <div class="nota">Los PIN de esta tabla son solo para la demostración. El sistema guarda únicamente un hash del PIN; ni el
+    cajero ni el panel de administración pueden mostrarlo. Para volver a estos valores en cualquier momento use
+    <strong>Restaurar datos</strong> en el panel de administración (capítulo 16).</div>
+
+  <h3>Marca del banco</h3>
+  <p>Al insertar una tarjeta, el cajero adopta los colores y el logotipo del banco registrado para esa cuenta
+    (Banco Industrial, G&amp;T Continental, Banrural, BAC Credomatic, Banco Promerica o BAM). Si se escribe un número de
+    tarjeta a mano, el banco se deduce de sus primeros dígitos: 4532 Banco Industrial, 5412 G&amp;T Continental,
+    4023 Banrural, 4152 BAC Credomatic, 5180 Banco Promerica y 4850 BAM.</p>
+</section>
+
+<!-- ============================================================ 4 -->
+<section class="capitulo">
+  <h2>4. Insertar la tarjeta</h2>
+  <ol>
+    <li>En la pantalla de bienvenida pulse <strong>INSERTAR TARJETA DE DÉBITO</strong> o haga clic en la ranura
+      <strong>Inserción tarjeta</strong>.</li>
+    <li>Se abre la <strong>Billetera Multibanca</strong> con las tarjetas registradas en el Core Bancario: titular, banco, red
+      (VISA o MC), estado, número de tarjeta enmascarado, número de cuenta y saldo disponible.</li>
+    <li>Pulse <strong>Insertar</strong> en la tarjeta deseada (o haga clic en cualquier parte de la fila).</li>
+    <li>También puede escribir un número de tarjeta (PAN) en <strong>O inserte manualmente por número</strong> y pulsar
+      <strong>Insertar</strong>. Si la tarjeta no existe en el Core, las operaciones se rechazarán con el código
+      <code>14</code> (cuenta inexistente).</li>
+  </ol>
+  <figure class="media">
+    <img src="img/02-seleccion-tarjeta.jpg" alt="Billetera de tarjetas">
+    <figcaption>Figura 2. Billetera Multibanca: selección de la tarjeta.</figcaption>
+  </figure>
+</section>
+
+<!-- ============================================================ 5 -->
+<section class="capitulo">
+  <h2>5. Ingresar el PIN</h2>
+  <ol>
+    <li>La pantalla muestra <strong>INGRESE SU NÚMERO DE PIN SECRETO</strong> y los últimos dígitos de la tarjeta.</li>
+    <li>Escriba los 4 dígitos con el teclado del cajero o con el de la computadora. Cada dígito aparece como un punto.</li>
+    <li>Al completar los 4 dígitos el cajero pasa al menú principal (también puede pulsar <strong>ENTRAR</strong>).</li>
+    <li><strong>BORRAR</strong> (<kbd>Retroceso</kbd>) quita el último dígito; <strong>CANCELAR</strong> (<kbd>Esc</kbd>) o
+      <strong>F8</strong> devuelven la tarjeta.</li>
+  </ol>
+  <figure class="media">
+    <img src="img/03-ingreso-pin.jpg" alt="Pantalla de ingreso de PIN">
+    <figcaption>Figura 3. Ingreso del PIN (dos dígitos escritos).</figcaption>
+  </figure>
+  <div class="nota"><strong>¿Cuándo se valida el PIN?</strong> El cajero no conoce el PIN de la tarjeta. Lo envía cifrado
+    dentro de cada retiro o consulta (campo <strong>DE 52</strong>, PIN block ISO 9564) y es el <strong>banco</strong>
+    quien lo valida. Por eso un PIN equivocado no se detecta al escribirlo, sino en la primera operación (capítulo 12).</div>
+</section>
+
+<!-- ============================================================ 6 -->
+<section class="capitulo">
+  <h2>6. Menú principal</h2>
+  <figure class="media">
+    <img src="img/04-menu-principal.jpg" alt="Menú principal">
+    <figcaption>Figura 4. Menú principal.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th>Botón</th><th>Teclas</th><th>Opción</th><th>Qué hace</th></tr></thead>
+    <tbody>
+      <tr><td>L1</td><td><kbd>F1</kbd> / <kbd>1</kbd></td><td>1. Retiro monetario</td><td>Abre el menú de montos de retiro (capítulo 7).</td></tr>
+      <tr><td>L2</td><td><kbd>F2</kbd> / <kbd>2</kbd></td><td>2. Retiro ahorros</td><td>Abre el mismo menú de montos; el retiro se debita de la cuenta de la tarjeta.</td></tr>
+      <tr><td>L3</td><td><kbd>F3</kbd> / <kbd>3</kbd></td><td>3. Consulta de saldo</td><td>Consulta el saldo disponible y contable (capítulo 9).</td></tr>
+      <tr><td>L4</td><td><kbd>F4</kbd> / <kbd>4</kbd></td><td>4. Seguridad PIN</td><td>Explica cómo se protege el PIN (capítulo 12). No muestra el PIN.</td></tr>
+      <tr><td>R1</td><td><kbd>F5</kbd> / <kbd>5</kbd></td><td>5. Reversa (0420)</td><td>Anula el último retiro aprobado con esta tarjeta (capítulo 10).</td></tr>
+      <tr><td>R2</td><td><kbd>F6</kbd> / <kbd>6</kbd></td><td>6. Echo test (0800)</td><td>Verifica la comunicación con el switch (capítulo 13).</td></tr>
+      <tr><td>R3</td><td><kbd>F7</kbd> / <kbd>7</kbd></td><td>7. Estado de cuenta</td><td>Muestra los últimos movimientos (capítulo 11).</td></tr>
+      <tr><td>R4</td><td><kbd>F8</kbd> / <kbd>8</kbd></td><td>8. Salir / expulsar</td><td>Termina la sesión y devuelve la tarjeta.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 7 -->
+<section class="capitulo">
+  <h2>7. Retiro de efectivo</h2>
+  <ol>
+    <li>En el menú principal elija <strong>1. Retiro monetario</strong> (<kbd>F1</kbd>) o <strong>2. Retiro ahorros</strong> (<kbd>F2</kbd>).</li>
+    <li>Elija un monto rápido o <strong>Otra cantidad</strong>:</li>
+  </ol>
+  <div class="par">
+    <figure>
+      <img src="img/05-menu-retiro.jpg" alt="Menú de montos">
+      <figcaption>Figura 5. Montos rápidos.</figcaption>
+    </figure>
+    <figure>
+      <img src="img/06-otra-cantidad.jpg" alt="Otra cantidad">
+      <figcaption>Figura 6. Otra cantidad (Q300 escrito).</figcaption>
+    </figure>
+  </div>
+  <table>
+    <thead><tr><th>Botón</th><th>Monto</th><th>Botón</th><th>Monto</th></tr></thead>
+    <tbody>
+      <tr><td>L1 (<kbd>F1</kbd>)</td><td>Q100.00</td><td>R1 (<kbd>F5</kbd>)</td><td>Q1,000.00</td></tr>
+      <tr><td>L2 (<kbd>F2</kbd>)</td><td>Q200.00</td><td>R2 (<kbd>F6</kbd>)</td><td>Q1,500.00</td></tr>
+      <tr><td>L3 (<kbd>F3</kbd>)</td><td>Q500.00</td><td>R3 (<kbd>F7</kbd>)</td><td>Q2,000.00</td></tr>
+      <tr><td>L4 (<kbd>F4</kbd>)</td><td>Otra cantidad</td><td>R4 (<kbd>F8</kbd>)</td><td>Volver al menú</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Otra cantidad:</strong> escriba el monto con el teclado y pulse <strong>ENTRAR</strong>. Debe ser múltiplo de
+    Q100 (el cajero entrega billetes de Q100 y Q200); si no lo es, aparece el aviso <em>MONTO NO DISPENSABLE</em>.
+    <strong>CANCELAR</strong> vuelve al menú de montos.</p>
+
+  <ol start="3">
+    <li>La pantalla muestra <strong>PROCESANDO TRANSACCIÓN…</strong> mientras la trama 0200 viaja al banco.</li>
+    <li>Si el banco aprueba (<code>00</code>), la pantalla muestra el comprobante con la tarjeta enmascarada, el código de
+      autorización, el RRN, el STAN, el monto retirado y el nuevo saldo disponible, y la bandeja de efectivo se ilumina.
+      Pulse <strong>Tomar Dinero</strong> para retirar los billetes.</li>
+  </ol>
+  <figure class="media">
+    <img src="img/07-retiro-aprobado.jpg" alt="Retiro aprobado">
+    <figcaption>Figura 7. Retiro de Q200 aprobado y efectivo dispensado.</figcaption>
+  </figure>
+  <p>Opciones después de un retiro aprobado:</p>
+  <table>
+    <thead><tr><th>Botón</th><th>Teclas</th><th>Acción</th></tr></thead>
+    <tbody>
+      <tr><td>R1 RECIBO</td><td><kbd>F5</kbd> / <kbd>1</kbd> / <kbd>5</kbd></td><td>Muestra el comprobante impreso (capítulo 8)</td></tr>
+      <tr><td>R2 OTRA OPER.</td><td><kbd>F6</kbd> / <kbd>2</kbd> / <kbd>6</kbd> / <kbd>Enter</kbd></td><td>Vuelve al menú sin expulsar la tarjeta</td></tr>
+      <tr><td>R4 EXPULSAR</td><td><kbd>F8</kbd> / <kbd>8</kbd> / <kbd>Esc</kbd></td><td>Termina la sesión</td></tr>
+    </tbody>
+  </table>
+  <div class="aviso"><strong>Límites:</strong> cada cuenta tiene un límite diario de retiro (por ejemplo, Q500 para Carlos Pérez).
+    Si el retiro supera lo que queda del límite del día, el banco responde <code>61</code>; si supera el saldo, <code>51</code>.
+    El acumulado diario se reinicia al cambiar de día.</div>
+</section>
+
+<!-- ============================================================ 8 -->
+<section class="capitulo">
+  <h2>8. Comprobante (recibo)</h2>
+  <p>Con <strong>RECIBO (F5)</strong> se abre el comprobante de la última operación. Incluye:</p>
+  <div class="par">
+    <figure class="chica" style="flex:0.9">
+      <img src="img/08-recibo.jpg" alt="Recibo térmico" style="max-width:100%">
+      <figcaption>Figura 8. Comprobante de un retiro.</figcaption>
+    </figure>
+    <div style="flex:1.1">
+      <ul>
+        <li>Banco emisor, NIT y fecha y hora de la operación.</li>
+        <li>Terminal (<code>ATMNX001</code>), banco emisor y ubicación.</li>
+        <li>Tarjeta enmascarada y nombre del cliente.</li>
+        <li>Operación: retiro (0200), consulta (0100), reversa (0420) o echo test (0800).</li>
+        <li>Monto (dispensado o reversado) y saldo disponible.</li>
+        <li><strong>RRN</strong>: referencia única de la transacción (12 caracteres).</li>
+        <li><strong>STAN</strong>: número de secuencia de la terminal (6 dígitos).</li>
+        <li><strong>Autorización</strong>: código asignado por el banco (aparece "—" cuando la respuesta no lo incluye, por ejemplo en una reversa).</li>
+        <li><strong>Respuesta ISO (DE 39)</strong> y su significado.</li>
+      </ul>
+      <p><strong>Imprimir</strong> usa la impresora de la computadora; <strong>Cerrar</strong> (o <kbd>Esc</kbd> / <kbd>Enter</kbd>) cierra el comprobante.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============================================================ 9 -->
+<section class="capitulo">
+  <h2>9. Consulta de saldo</h2>
+  <ol>
+    <li>En el menú principal pulse <strong>3. Consulta de saldo</strong> (<kbd>F3</kbd>). El cajero envía una consulta 0100 con el PIN.</li>
+    <li>Si el banco aprueba, se muestran la cuenta, el titular, la moneda, el <strong>saldo disponible</strong> y el
+      <strong>saldo contable</strong> (mensaje de respuesta 0110).</li>
+    <li>Opciones: <strong>RECIBO (F5)</strong>, <strong>OTRA OPER. (F7)</strong> y <strong>EXPULSAR (F8)</strong>.</li>
+  </ol>
+  <figure class="media">
+    <img src="img/09-consulta-saldo.jpg" alt="Consulta de saldo">
+    <figcaption>Figura 9. Resultado de la consulta de saldo.</figcaption>
+  </figure>
+  <p>Si el PIN es incorrecto o la tarjeta está bloqueada o expirada, la consulta se rechaza igual que un retiro (capítulo 14).</p>
+</section>
+
+<!-- ============================================================ 10 -->
+<section class="capitulo">
+  <h2>10. Reversa del último retiro</h2>
+  <p>La reversa anula un retiro que el banco aprobó pero que no se completó (por ejemplo, si el dispensador no entregó
+    los billetes). El cajero envía un mensaje <strong>0420</strong> con el mismo RRN, monto y tipo de operación del retiro
+    original, y el banco devuelve el dinero a la cuenta.</p>
+  <ol>
+    <li>Realice un retiro aprobado (capítulo 7) y vuelva al menú con <strong>OTRA OPER.</strong></li>
+    <li>Pulse <strong>5. Reversa (0420)</strong> (<kbd>F5</kbd>).</li>
+    <li>La pantalla muestra <strong>REVERSA APLICADA • SALDO RESTITUIDO</strong>, el mensaje 0430, el monto reversado y el saldo actualizado.</li>
+  </ol>
+  <figure class="media">
+    <img src="img/10-reversa.jpg" alt="Reversa aplicada">
+    <figcaption>Figura 10. Reversa aprobada del retiro de Q200.</figcaption>
+  </figure>
+  <ul>
+    <li>Solo se puede reversar el <strong>último retiro aprobado</strong> de la tarjeta insertada, y <strong>una sola vez</strong>.</li>
+    <li>Si no hay un retiro pendiente de reversar, aparece el aviso <em>SIN TRANSACCIÓN QUE REVERSAR</em> y no se envía nada.</li>
+    <li>Al expulsar la tarjeta se pierde la referencia del último retiro.</li>
+  </ul>
+</section>
+
+<!-- ============================================================ 11 -->
+<section class="capitulo">
+  <h2>11. Estado de cuenta</h2>
+  <p>La opción <strong>7. Estado de cuenta</strong> (<kbd>F7</kbd>) muestra los cuatro movimientos más recientes de la
+    cuenta, del más nuevo al más antiguo, con la hora, el tipo de operación y el monto:</p>
+  <ul>
+    <li>Débitos (retiros, compras, transferencias enviadas) en rojo con signo <strong>−</strong>.</li>
+    <li>Créditos (reversas, devoluciones) en verde con signo <strong>+</strong>.</li>
+    <li>Consultas sin signo.</li>
+    <li>Operaciones rechazadas en gris, con su código, por ejemplo <em>RETIRO (DE39 55)</em>.</li>
+  </ul>
+  <figure class="media">
+    <img src="img/11-estado-cuenta.jpg" alt="Estado de cuenta">
+    <figcaption>Figura 11. Últimos movimientos: retiro, consulta y reversa.</figcaption>
+  </figure>
+  <p><strong>VOLVER AL MENÚ (F8)</strong> regresa al menú principal.</p>
+</section>
+
+<!-- ============================================================ 12 -->
+<section class="capitulo">
+  <h2>12. Seguridad del PIN, PIN incorrecto y bloqueo</h2>
+  <h3>Opción 4. Seguridad PIN</h3>
+  <p>Explica en pantalla cómo se protege el PIN. El cajero no guarda ni muestra el PIN.</p>
+  <figure class="media">
+    <img src="img/12-seguridad-pin.jpg" alt="Seguridad del PIN">
+    <figcaption>Figura 12. Mensaje de la opción Seguridad PIN.</figcaption>
+  </figure>
+
+  <h3>PIN incorrecto</h3>
+  <ol>
+    <li>Si el PIN no coincide, el banco rechaza la operación con <strong>55 - Clave PIN incorrecta</strong>.</li>
+    <li>Pulse <strong>REINGRESAR PIN (F8)</strong> (o <kbd>Enter</kbd>): el cajero vuelve a pedir el PIN sin expulsar la tarjeta.</li>
+  </ol>
+  <div class="par">
+    <figure>
+      <img src="img/13-pin-incorrecto.jpg" alt="PIN incorrecto">
+      <figcaption>Figura 13. Rechazo por PIN incorrecto (55).</figcaption>
+    </figure>
+    <figure>
+      <img src="img/14-reingreso-pin.jpg" alt="Reingreso del PIN">
+      <figcaption>Figura 14. El cajero vuelve a pedir el PIN.</figcaption>
+    </figure>
+  </div>
+  <div class="peligro"><strong>Bloqueo por intentos:</strong> al <strong>tercer</strong> PIN incorrecto seguido el banco bloquea la
+    tarjeta y responde <strong>75</strong>; el botón cambia a <strong>RETIRAR TARJETA (F8)</strong>. Desde entonces la
+    tarjeta se rechaza con <strong>05</strong> hasta que un administrador la desbloquee (capítulo 16). Un PIN correcto antes
+    del tercer intento reinicia el contador.</div>
+</section>
+
+<!-- ============================================================ 13 -->
+<section class="seccion">
+  <h2>13. Echo test de red</h2>
+  <p>La opción <strong>6. Echo test (0800)</strong> (<kbd>F6</kbd>) comprueba que el cajero se comunica con el switch.
+    No mueve dinero ni requiere PIN. Si la comunicación funciona, la pantalla muestra <strong>ECHO TEST EXITOSO • ENLACE CON EL
+    SWITCH ACTIVO</strong>, el mensaje de respuesta <strong>0810</strong> y el estado <strong>ACTIVO</strong>.</p>
+</section>
+
+<!-- ============================================================ 14 -->
+<section class="capitulo">
+  <h2>14. Mensajes de rechazo</h2>
+  <p>Cuando el banco no aprueba una operación, la pantalla muestra <strong>OPERACIÓN RECHAZADA</strong> con el código y su
+    descripción. <strong>VOLVER AL MENÚ (F8)</strong> o <kbd>Enter</kbd> regresan al menú; <kbd>Esc</kbd> expulsa la tarjeta.</p>
+  <table>
+    <thead><tr><th>Código</th><th>Significado</th><th>Qué hacer</th></tr></thead>
+    <tbody>
+      <tr><td>05</td><td>Tarjeta bloqueada</td><td>La cuenta está bloqueada (por el administrador o por intentos de PIN). Un administrador puede desbloquearla.</td></tr>
+      <tr><td>12</td><td>Transacción inválida</td><td>Tipo de operación no soportado.</td></tr>
+      <tr><td>13</td><td>Monto inválido</td><td>Use un monto mayor que cero.</td></tr>
+      <tr><td>14</td><td>Cuenta o tarjeta inexistente</td><td>Verifique la tarjeta; si la escribió a mano, que exista en el Core.</td></tr>
+      <tr><td>25</td><td>Transacción original no encontrada</td><td>La reversa no encontró el retiro original.</td></tr>
+      <tr><td>30</td><td>Error de formato</td><td>La trama llegó incompleta o ilegible. Reintente.</td></tr>
+      <tr><td>51</td><td>Fondos insuficientes</td><td>Elija un monto menor o consulte el saldo.</td></tr>
+      <tr><td>54</td><td>Tarjeta expirada</td><td>Use otra tarjeta; un administrador puede cambiar el estado.</td></tr>
+      <tr><td>55</td><td>PIN incorrecto</td><td>Reingrese el PIN (capítulo 12).</td></tr>
+      <tr><td>61</td><td>Excede el límite diario</td><td>Retire un monto dentro del límite restante o espere al día siguiente.</td></tr>
+      <tr><td>68</td><td>Tiempo de espera agotado</td><td>El banco tardó en responder. Reintente.</td></tr>
+      <tr><td>75</td><td>Intentos de PIN excedidos</td><td>La tarjeta quedó bloqueada; retírela y contacte al administrador.</td></tr>
+      <tr><td>91</td><td>Banco no disponible</td><td>El Core Bancario no responde. Reintente más tarde.</td></tr>
+      <tr><td>96</td><td>Error del sistema</td><td>Error interno. Reintente; si persiste, revise los registros del sistema.</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<!-- ============================================================ 15 -->
+<section class="capitulo">
+  <h2>15. Panel de administración: acceso</h2>
+  <ol>
+    <li>Pulse <strong>Acceso Administrador</strong> (esquina superior derecha).</li>
+    <li>Escriba el <strong>usuario</strong> y la <strong>contraseña</strong>. Por defecto son <code>admin</code> /
+      <code>Nexus2026_Admin</code>; se cambian en el archivo <code>.env</code> (<code>ADMIN_USER</code>, <code>ADMIN_PASSWORD</code>).</li>
+    <li>Pulse <strong>Ingresar</strong>. El servidor valida las credenciales; si son incorrectas aparece
+      <em>Usuario o contraseña incorrectos</em>.</li>
+    <li>Con el acceso concedido aparecen las pestañas <strong>Cuentas &amp; Tarjetas Multibanca</strong> y
+      <strong>Consola ISO 8583</strong>, y el botón <strong>Volver al Cajero (Usuario)</strong>.</li>
+    <li>Para salir pulse <strong>Cerrar Sesión Admin</strong>. La sesión también se cierra sola si el servidor rechaza las
+      credenciales (por ejemplo, si se cambió la contraseña).</li>
+  </ol>
+  <figure class="media">
+    <img src="img/15-login-admin.jpg" alt="Inicio de sesión de administrador">
+    <figcaption>Figura 15. Inicio de sesión de administrador.</figcaption>
+  </figure>
+  <div class="nota">Las credenciales solo se mantienen en la pestaña abierta del navegador; al recargar la página hay que
+    volver a iniciar sesión.</div>
+</section>
+
+<!-- ============================================================ 16 -->
+<section class="capitulo">
+  <h2>16. Gestión de cuentas y tarjetas</h2>
+  <p>La parte superior muestra los indicadores del Core: número de cuentas, suma de saldos disponibles (saldo bóveda),
+    número de transacciones registradas y estado del switch ISO 8583 (puerto 15000).</p>
+  <figure>
+    <img src="img/16a-admin-indicadores.jpg" alt="Indicadores">
+    <figcaption>Figura 16. Indicadores del Core Bancario.</figcaption>
+  </figure>
+  <figure>
+    <img src="img/16b-admin-cuentas.jpg" alt="Tabla de cuentas">
+    <figcaption>Figura 17. Tabla de cuentas con sus acciones.</figcaption>
+  </figure>
+  <h3>Botones generales</h3>
+  <ul>
+    <li><strong>Nueva Cuenta / Tarjeta Débito</strong>: alta de una cuenta con su tarjeta.</li>
+    <li><strong>Actualizar</strong>: vuelve a leer cuentas y transacciones.</li>
+    <li><strong>Restaurar datos</strong>: pide confirmación y devuelve las cinco cuentas de demostración a su saldo, estado y
+      PIN iniciales (las recrea si se borraron) y borra el historial de transacciones. Las demás cuentas se conservan.</li>
+  </ul>
+  <h3>Acciones de cada cuenta</h3>
+  <table>
+    <thead><tr><th>Botón</th><th>Acción</th></tr></thead>
+    <tbody>
+      <tr><td>Tarjeta</td><td>Muestra la tarjeta de débito y permite <strong>Probar esta Tarjeta en el Cajero</strong> (la inserta directamente).</td></tr>
+      <tr><td>Depositar</td><td>Acredita un monto a la cuenta (montos rápidos Q100, Q200, Q500 y Q1,000, o uno escrito).</td></tr>
+      <tr><td>Editar</td><td>Cambia titular, banco, saldo, límite diario, estado o PIN.</td></tr>
+      <tr><td>Bloquear / Desbloquear</td><td>Alterna el estado entre activa y bloqueada. Desbloquear también reinicia los intentos de PIN fallidos.</td></tr>
+      <tr><td>Papelera</td><td>Elimina la cuenta (pide confirmación).</td></tr>
+    </tbody>
+  </table>
+  <p>La columna <strong>PIN</strong> muestra siempre <code>••••</code>: el PIN se guarda como hash y no se puede recuperar.</p>
+
+  <h3>Nueva cuenta</h3>
+  <div class="par">
+    <figure>
+      <img src="img/17-admin-nueva-cuenta.jpg" alt="Nueva cuenta">
+      <figcaption>Figura 18. Alta de cuenta y tarjeta.</figcaption>
+    </figure>
+    <div style="flex:1">
+      <ul>
+        <li><strong>Generar Datos</strong> completa el formulario con datos de ejemplo válidos.</li>
+        <li><strong>PIN</strong>: exactamente 4 dígitos.</li>
+        <li><strong>Tarjeta (PAN)</strong>: 16 dígitos; los botones <em>Visa</em> y <em>Mastercard</em> generan uno.</li>
+        <li><strong>Saldo inicial</strong>, <strong>límite diario</strong> y <strong>estado</strong> (activa, bloqueada o expirada).</li>
+        <li><strong>Guardar en Core Bancario</strong> crea la cuenta. Si el número de cuenta o la tarjeta ya existen, se informa el error.</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Editar, ver tarjeta y depositar</h3>
+  <div class="par">
+    <figure>
+      <img src="img/18-admin-editar-cuenta.jpg" alt="Editar cuenta">
+      <figcaption>Figura 19. Edición de la cuenta.</figcaption>
+    </figure>
+    <figure>
+      <img src="img/19-admin-ver-tarjeta.jpg" alt="Ver tarjeta">
+      <figcaption>Figura 20. Tarjeta de débito.</figcaption>
+    </figure>
+  </div>
+  <div class="par">
+    <div style="flex:1.2">
+      <ul>
+        <li>En <strong>Editar</strong>, el campo <strong>Nuevo PIN</strong> aparece vacío: déjelo así para conservar el PIN actual, o escriba 4 dígitos para cambiarlo.</li>
+        <li>El número de tarjeta no se puede modificar.</li>
+        <li>En <strong>Tarjeta</strong>, el botón <strong>Probar esta Tarjeta en el Cajero</strong> vuelve al cajero con la tarjeta insertada.</li>
+        <li>En <strong>Depositar</strong>, elija un monto rápido o escriba otro y pulse <strong>Aplicar Depósito</strong>; el saldo se actualiza al instante.</li>
+      </ul>
+    </div>
+    <figure>
+      <img src="img/20-admin-deposito.jpg" alt="Depósito">
+      <figcaption>Figura 21. Depósito a una cuenta.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ============================================================ 17 -->
+<section class="seccion">
+  <h2>17. Historial de transacciones</h2>
+  <p>Debajo de la tabla de cuentas se listan las transacciones registradas por el Core, de la más reciente a la más
+    antigua: RRN, STAN, tipo de operación, cuenta, monto, código DE 39 (aprobada en verde, rechazada en rojo),
+    autorización y fecha y hora.</p>
+  <figure>
+    <img src="img/16c-admin-historial.jpg" alt="Historial de transacciones">
+    <figcaption>Figura 22. Historial: retiro, consulta, reversa (mismo RRN que el retiro) y consulta rechazada por PIN.</figcaption>
+  </figure>
+  <p>Observe que la reversa tiene el <strong>mismo RRN</strong> que el retiro que anuló, y que las operaciones rechazadas
+    no tienen código de autorización.</p>
+</section>
+
+<!-- ============================================================ 18 -->
+<section class="capitulo">
+  <h2>18. Consola ISO 8583</h2>
+  <p>La pestaña <strong>Consola ISO 8583</strong> permite armar una transacción a mano y ver la trama completa. La
+    transacción se procesa con el mismo flujo que una trama recibida por el socket TCP del Recolector, y afecta los
+    saldos reales.</p>
+  <figure class="alta">
+    <img src="img/21-consola-iso.jpg" alt="Consola ISO 8583">
+    <figcaption>Figura 23. Retiro 0200 enviado desde la consola y comienzo de su respuesta 0210.</figcaption>
+  </figure>
+  <table>
+    <thead><tr><th>Campo</th><th>Uso</th></tr></thead>
+    <tbody>
+      <tr><td>MTI (tipo de mensaje)</td><td>0200 retiro, 0100 consulta, 0420 reversa, 0800 echo test.</td></tr>
+      <tr><td>Processing Code (DE 3)</td><td><code>010000</code> retiro, <code>000000</code> compra, <code>300000</code> consulta, <code>400000</code> transferencia, <code>200000</code> devolución.</td></tr>
+      <tr><td>Monto (DE 4)</td><td>Monto en quetzales.</td></tr>
+      <tr><td>Cuenta origen (DE 102)</td><td>Una de las cuentas de demostración.</td></tr>
+      <tr><td>Terminal ID (DE 41)</td><td>Identificador de la terminal (8 caracteres).</td></tr>
+      <tr><td>PIN (DE 52)</td><td>Opcional: 4 dígitos. Obligatorio para retiros y consultas.</td></tr>
+      <tr><td>RRN (DE 37)</td><td>Vacío para generar uno nuevo. En una reversa 0420, el RRN del retiro a anular.</td></tr>
+    </tbody>
+  </table>
+  <p>Al pulsar <strong>Enviar Trama ISO 8583</strong> aparece la respuesta: tramas enviada y recibida en ASCII, bitmap,
+    código DE 39 con su descripción, autorización, saldos, latencia y la lista de campos (Data Elements) enviados y
+    recibidos. El PAN y el PIN block aparecen enmascarados.</p>
+</section>
+
+<!-- ============================================================ 19 -->
+<section class="capitulo">
+  <h2>19. Preguntas frecuentes y solución de problemas</h2>
+  <table>
+    <thead><tr><th>Situación</th><th>Causa probable</th><th>Solución</th></tr></thead>
+    <tbody>
+      <tr><td>La página no abre</td><td>El sistema no está en ejecución o usa otro puerto.</td><td>Verifique con <code>docker compose ps</code> que <code>cajero-app</code> esté <em>healthy</em> y use el puerto de <code>APP_HTTP_PORT</code> en <code>.env</code>.</td></tr>
+      <tr><td>La billetera dice "Error de conexión con el Core Bancario"</td><td>La base de datos no está disponible.</td><td>Revise <code>docker compose logs app</code> y que <code>cajero-sqlserver</code> esté <em>healthy</em>.</td></tr>
+      <tr><td>El PIN se aceptó pero el retiro dice 55</td><td>El PIN se valida en el banco al enviar la operación.</td><td>Reingrese el PIN correcto (capítulo 12).</td></tr>
+      <tr><td>La tarjeta quedó bloqueada (75 y luego 05)</td><td>Tres PIN incorrectos seguidos.</td><td>Panel de administración → <strong>Desbloquear</strong>, o <strong>Restaurar datos</strong> para las cuentas de demostración.</td></tr>
+      <tr><td>"Otra cantidad" no acepta el monto</td><td>El monto no es múltiplo de Q100.</td><td>Use Q100, Q200, Q300…</td></tr>
+      <tr><td>La reversa dice "Sin transacción que reversar"</td><td>No hay un retiro aprobado pendiente en esta sesión de tarjeta.</td><td>Haga un retiro y luego la reversa, sin expulsar la tarjeta.</td></tr>
+      <tr><td>Retiro rechazado con 61 aunque hay saldo</td><td>Se alcanzó el límite diario de retiro.</td><td>Retire menos, espere al día siguiente o aumente el límite desde <strong>Editar</strong>.</td></tr>
+      <tr><td>El administrador no puede iniciar sesión</td><td>Usuario o contraseña distintos a los de <code>.env</code>.</td><td>Revise <code>ADMIN_USER</code> y <code>ADMIN_PASSWORD</code> y reinicie con <code>docker compose up -d</code>.</td></tr>
+      <tr><td>Las teclas F1–F8 no responden</td><td>No hay tarjeta insertada o el cursor está dentro de un campo de texto.</td><td>Inserte una tarjeta y haga clic fuera de los campos.</td></tr>
+      <tr><td>Quiero empezar de cero</td><td>—</td><td><strong>Restaurar datos</strong> en el panel, o <code>docker compose down -v</code> seguido de <code>docker compose up -d</code> para recrear la base.</td></tr>
+    </tbody>
+  </table>
+  <p class="pie-doc">RED NEXUS • Manual de Usuario • Recolector Transaccional ISO 8583 • Octubre de 2026</p>
+</section>
+
+</main>
+</body>
+</html>
