@@ -58,6 +58,17 @@ public class CoreBancarioService {
     private static final int MAX_INTENTOS_PIN = 3;
     private static final int MAX_LISTADO = 1000;
 
+    /** Cuentas de demostración (las mismas de init_sqlserver.sql): POST /reset las devuelve a este estado. */
+    private record CuentaSemilla(String numeroCuenta, String pan, String titular, String saldo, String limite,
+                                 String estado, String pin, String banco) {}
+
+    private static final List<CuentaSemilla> SEMILLAS = List.of(
+            new CuentaSemilla("1001-2002-3001", "4532000000000001", "CARLOS PEREZ", "1500.00", "500.00", ACTIVA, "1234", "BANCO INDUSTRIAL"),
+            new CuentaSemilla("1001-2002-3002", "5412000000000002", "MARIA GOMEZ", "350.00", "300.00", ACTIVA, "4321", "G&T CONTINENTAL"),
+            new CuentaSemilla("1001-2002-3003", "4000000000000003", "JUAN LOPEZ", "500.00", "200.00", VENCIDA, "2222", "BANRURAL"),
+            new CuentaSemilla("1001-2002-3004", "4000000000000004", "ANA MORALES", "1000.00", "500.00", BLOQUEADA, "9999", "BAC CREDOMATIC"),
+            new CuentaSemilla("1001-2002-3005", "4000000000000005", "PEDRO RAMOS", "10.00", "100.00", ACTIVA, "1111", "BANCO PROMERICA"));
+
     private final CuentaRepository cuentaRepository;
     private final TransaccionRepository transaccionRepository;
     private final TransactionTemplate transactionTemplate;
@@ -445,7 +456,10 @@ public class CoreBancarioService {
         }).orElse(false);
     }
 
-    /** Restablece el entorno de demostración: vacía transacciones y reinicia acumulados e intentos de PIN. */
+    /**
+     * Restablece el entorno de demostración: vacía las transacciones, reinicia acumulados e intentos de PIN
+     * de todas las cuentas y devuelve las cuentas semilla a sus valores iniciales (recreándolas si se borraron).
+     */
     @Transactional
     public void resetCuentas() {
         transaccionRepository.deleteAllInBatch();
@@ -454,7 +468,32 @@ public class CoreBancarioService {
             c.setFechaUltimoRetiro(null);
             c.setIntentosPinFallidos(0);
         }
-        log.info("Reset completado: transacciones vaciadas y acumulados diarios reiniciados.");
+        for (CuentaSemilla semilla : SEMILLAS) {
+            restaurarSemilla(semilla);
+        }
+        log.info("Reset completado: transacciones vaciadas, acumulados reiniciados y cuentas semilla restauradas.");
+    }
+
+    private void restaurarSemilla(CuentaSemilla s) {
+        BigDecimal saldo = new BigDecimal(s.saldo());
+        Optional<CuentaEntity> existente = cuentaRepository.findByNumeroCuenta(s.numeroCuenta());
+        if (existente.isEmpty()) {
+            if (cuentaRepository.existsByPan(s.pan())) {
+                log.warn("No se recrea la cuenta semilla {}: su PAN ya pertenece a otra cuenta", s.numeroCuenta());
+                return;
+            }
+            cuentaRepository.save(new CuentaEntity(s.numeroCuenta(), s.pan(), s.titular(), saldo,
+                    new BigDecimal(s.limite()), s.estado(), PinHasher.hash(s.numeroCuenta(), s.pin()), s.banco()));
+            return;
+        }
+        CuentaEntity c = existente.get();
+        c.setTitular(s.titular());
+        c.setSaldoDisponible(saldo);
+        c.setSaldoContable(saldo);
+        c.setLimiteDiario(new BigDecimal(s.limite()));
+        c.setEstado(s.estado());
+        c.setPinHash(PinHasher.hash(s.numeroCuenta(), s.pin()));
+        c.setBanco(s.banco());
     }
 
     private Optional<CuentaEntity> buscarCuenta(String id) {

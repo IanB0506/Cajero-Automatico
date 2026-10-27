@@ -1,69 +1,288 @@
 <?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Prueba de carga ISO 8583 del Recolector Transaccional (Apache JMeter 5.6+).
+
+  Modo consola (recomendado para medir TPS) con reporte HTML:
+    jmeter -n -t load-test-iso8583.jmx -l resultados.jtl -e -o reporte-carga
+  Parámetros (-J): host, tcpPort, httpPort, adminUser, adminPassword, terminales, rampa, duracion,
+                   procCode, montoCentavos, pin. Ejemplo: -Jterminales=400 -Jduracion=120
+
+  setUp: crea por HTTP una cuenta por terminal (LOAD-0001 .., saldo Q1,000,000, PIN 1234).
+  Carga: cada hilo es una terminal con una conexión TCP persistente que envía tramas 0200
+  con prefijo de longitud de 2 bytes (LengthPrefixedBinaryTCPClientImpl) y PIN block en el DE 52;
+  la aserción valida que la respuesta sea 0210 con DE 39 = 00. El TPS es la columna Throughput.
+-->
 <jmeterTestPlan version="1.2" properties="5.0" jmeter="5.6.3">
   <hashTree>
-    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Plan de Pruebas de Carga ISO 8583 - Recolector Transaccional 2000+ TPS" enabled="true">
-      <stringProp name="TestPlan.comments">Prueba de alto rendimiento para evaluar Virtual Threads (Loom), latencia p99 y pausas Generational ZGC</stringProp>
+    <TestPlan guiclass="TestPlanGui" testclass="TestPlan" testname="Carga ISO 8583 - Recolector Transaccional" enabled="true">
+      <stringProp name="TestPlan.comments">Mide TPS y latencias del flujo completo: TCP ISO 8583 -> Recolector -> RestClient -> Core Bancario -> SQL Server</stringProp>
       <boolProp name="TestPlan.functional_mode">false</boolProp>
       <boolProp name="TestPlan.tearDown_on_shutdown">true</boolProp>
       <boolProp name="TestPlan.serialize_threadgroups">false</boolProp>
-      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="Variables de Usuario" enabled="true">
+      <elementProp name="TestPlan.user_defined_variables" elementType="Arguments" guiclass="ArgumentsPanel" testclass="Arguments" testname="Variables" enabled="true">
         <collectionProp name="Arguments.arguments">
           <elementProp name="HOST" elementType="Argument">
             <stringProp name="Argument.name">HOST</stringProp>
-            <stringProp name="Argument.value">localhost</stringProp>
+            <stringProp name="Argument.value">${__P(host,localhost)}</stringProp>
+            <stringProp name="Argument.desc">Host del Recolector</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
-          <elementProp name="PORT" elementType="Argument">
-            <stringProp name="Argument.name">PORT</stringProp>
-            <stringProp name="Argument.value">15000</stringProp>
+          <elementProp name="TCP_PORT" elementType="Argument">
+            <stringProp name="Argument.name">TCP_PORT</stringProp>
+            <stringProp name="Argument.value">${__P(tcpPort,15000)}</stringProp>
+            <stringProp name="Argument.desc">Puerto del socket ISO 8583</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
-          <elementProp name="TARGET_TPS" elementType="Argument">
-            <stringProp name="Argument.name">TARGET_TPS</stringProp>
-            <stringProp name="Argument.value">2500</stringProp>
+          <elementProp name="HTTP_PORT" elementType="Argument">
+            <stringProp name="Argument.name">HTTP_PORT</stringProp>
+            <stringProp name="Argument.value">${__P(httpPort,8087)}</stringProp>
+            <stringProp name="Argument.desc">Puerto HTTP (alta de cuentas de carga)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="ADMIN_USER" elementType="Argument">
+            <stringProp name="Argument.name">ADMIN_USER</stringProp>
+            <stringProp name="Argument.value">${__P(adminUser,admin)}</stringProp>
+            <stringProp name="Argument.desc">Usuario administrador (HTTP Basic)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="ADMIN_PASSWORD" elementType="Argument">
+            <stringProp name="Argument.name">ADMIN_PASSWORD</stringProp>
+            <stringProp name="Argument.value">${__P(adminPassword,Nexus2026_Admin)}</stringProp>
+            <stringProp name="Argument.desc">Contraseña del administrador</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="TERMINALES" elementType="Argument">
+            <stringProp name="Argument.name">TERMINALES</stringProp>
+            <stringProp name="Argument.value">${__P(terminales,200)}</stringProp>
+            <stringProp name="Argument.desc">Terminales concurrentes (1 hilo = 1 conexión TCP persistente)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="RAMPA" elementType="Argument">
+            <stringProp name="Argument.name">RAMPA</stringProp>
+            <stringProp name="Argument.value">${__P(rampa,10)}</stringProp>
+            <stringProp name="Argument.desc">Segundos para conectar todas las terminales</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="DURACION" elementType="Argument">
+            <stringProp name="Argument.name">DURACION</stringProp>
+            <stringProp name="Argument.value">${__P(duracion,60)}</stringProp>
+            <stringProp name="Argument.desc">Duración de la prueba en segundos</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="PROC_CODE" elementType="Argument">
+            <stringProp name="Argument.name">PROC_CODE</stringProp>
+            <stringProp name="Argument.value">${__P(procCode,010000)}</stringProp>
+            <stringProp name="Argument.desc">DE 3: 010000 retiro (con PIN)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="MONTO_CENTAVOS" elementType="Argument">
+            <stringProp name="Argument.name">MONTO_CENTAVOS</stringProp>
+            <stringProp name="Argument.value">${__P(montoCentavos,1)}</stringProp>
+            <stringProp name="Argument.desc">DE 4 en centavos (1 = Q0.01)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="PIN" elementType="Argument">
+            <stringProp name="Argument.name">PIN</stringProp>
+            <stringProp name="Argument.value">${__P(pin,1234)}</stringProp>
+            <stringProp name="Argument.desc">PIN de las cuentas de carga (viaja en el DE 52)</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
         </collectionProp>
       </elementProp>
+      <stringProp name="TestPlan.user_define_classpath"></stringProp>
     </TestPlan>
     <hashTree>
-      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Grupo de Hilos - 2000 Terminales Concurrentes" enabled="true">
-        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
-        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Controlador Bucle" enabled="true">
+      <SetupThreadGroup guiclass="SetupThreadGroupGui" testclass="SetupThreadGroup" testname="setUp - Cuentas de carga" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">stoptest</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Bucle" enabled="true">
           <boolProp name="LoopController.continue_forever">false</boolProp>
-          <stringProp name="LoopController.loops">5</stringProp>
+          <stringProp name="LoopController.loops">1</stringProp>
         </elementProp>
-        <stringProp name="ThreadGroup.num_threads">2000</stringProp>
-        <stringProp name="ThreadGroup.ramp_time">5</stringProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">1</stringProp>
         <boolProp name="ThreadGroup.scheduler">false</boolProp>
         <stringProp name="ThreadGroup.duration"></stringProp>
         <stringProp name="ThreadGroup.delay"></stringProp>
         <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </SetupThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Alta de cuentas de carga (HTTP Basic)" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">// setUp: da de alta (o reutiliza) una cuenta por terminal: LOAD-0001 .. LOAD-n, PAN 4888000000000001 ..
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+
+String base = 'http://' + vars.get('HOST') + ':' + vars.get('HTTP_PORT')
+String auth = 'Basic ' + (vars.get('ADMIN_USER') + ':' + vars.get('ADMIN_PASSWORD')).getBytes('UTF-8').encodeBase64().toString()
+int terminales = vars.get('TERMINALES') as int
+HttpClient cliente = HttpClient.newHttpClient()
+int creadas = 0
+int existentes = 0
+for (int i = 1; i &lt;= terminales; i++) {
+    String cuerpo = String.format('{"titular":"CARGA %04d","numeroCuenta":"LOAD-%04d","pan":"4888%012d",' +
+            '"saldoInicial":1000000,"limiteDiario":1000000,"pin":"%s","banco":"CARGA"}', i, i, i, vars.get('PIN'))
+    HttpResponse&lt;String&gt; r = cliente.send(HttpRequest.newBuilder(URI.create(base + '/api/core/cuentas'))
+            .header('Authorization', auth).header('Content-Type', 'application/json')
+            .POST(HttpRequest.BodyPublishers.ofString(cuerpo)).build(), HttpResponse.BodyHandlers.ofString())
+    if (r.statusCode() == 201) {
+        creadas++
+    } else if (r.statusCode() == 409) {
+        existentes++
+    } else {
+        SampleResult.setSuccessful(false)
+        SampleResult.setResponseCode(String.valueOf(r.statusCode()))
+        SampleResult.setResponseMessage('Alta de LOAD-' + i + ' rechazada: HTTP ' + r.statusCode() + ' ' + r.body())
+        return
+    }
+}
+// Identificador de corrida (4 caracteres base 36) para que los RRN no se repitan entre ejecuciones
+String corrida = Long.toString((System.currentTimeMillis().intdiv(1000L)) % 1679616L, 36).toUpperCase().padLeft(4, '0')
+props.put('CORRIDA', corrida)
+SampleResult.setResponseData('Cuentas creadas: ' + creadas + ', ya existentes: ' + existentes + ', corrida ' + corrida, 'UTF-8')
+</stringProp>
+          </JSR223Sampler>
+        <hashTree/>
+      </hashTree>
+      <ThreadGroup guiclass="ThreadGroupGui" testclass="ThreadGroup" testname="Terminales ISO 8583" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Bucle" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <intProp name="LoopController.loops">-1</intProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">${TERMINALES}</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">${RAMPA}</stringProp>
+        <boolProp name="ThreadGroup.scheduler">true</boolProp>
+        <stringProp name="ThreadGroup.duration">${DURACION}</stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
       </ThreadGroup>
       <hashTree>
-        <TCPSampler guiclass="TCPSamplerGui" testclass="TCPSampler" testname="TCP ISO 8583 MTI 0200 Financial Request" enabled="true">
+        <TCPSampler guiclass="TCPSamplerGui" testclass="TCPSampler" testname="0200 Retiro ISO 8583" enabled="true">
           <stringProp name="TCPSampler.server">${HOST}</stringProp>
+          <stringProp name="TCPSampler.port">${TCP_PORT}</stringProp>
           <boolProp name="TCPSampler.reUseConnection">true</boolProp>
-          <stringProp name="TCPSampler.port">${PORT}</stringProp>
+          <boolProp name="TCPSampler.closeConnection">false</boolProp>
           <boolProp name="TCPSampler.nodelay">true</boolProp>
-          <stringProp name="TCPSampler.timeout">5000</stringProp>
-          <stringProp name="TCPSampler.request">0200B23800000880800000000000040000001645320000000000010000000000000100001006215630${__Random(100000,999999)}2156301006262722${__Random(100000,999999)}POS00001840141001-2002-3001</stringProp>
-          <stringProp name="ConfigTestElement.username"></stringProp>
-          <stringProp name="ConfigTestElement.password"></stringProp>
+          <stringProp name="TCPSampler.classname">org.apache.jmeter.protocol.tcp.sampler.LengthPrefixedBinaryTCPClientImpl</stringProp>
+          <stringProp name="TCPSampler.timeout">10000</stringProp>
+          <stringProp name="ConfigTestElement.connect_timeout">5000</stringProp>
+          <stringProp name="TCPSampler.request">${TRAMA_HEX}</stringProp>
+          <stringProp name="TCPSampler.soLinger"></stringProp>
+          <stringProp name="TCPSampler.EolByte"></stringProp>
         </TCPSampler>
         <hashTree>
-          <ResponseAssertion guiclass="AssertionGui" testclass="ResponseAssertion" testname="Aserción Aprobado DE 39='00'" enabled="true">
-            <collectionProp name="Asserion.test_strings">
-              <stringProp name="1537">00</stringProp>
-            </collectionProp>
-            <stringProp name="Assertion.custom_message">Transacción ISO 8583 rechazada o fallida</stringProp>
-            <stringProp name="Assertion.test_field">Assertion.response_data</stringProp>
-            <boolProp name="Assertion.assume_success">false</boolProp>
-            <intProp name="Assertion.test_type">2</intProp>
-          </ResponseAssertion>
+          <JSR223PreProcessor guiclass="TestBeanGUI" testclass="JSR223PreProcessor" testname="Armar trama 0200 con PIN block (DE 52)" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">// Arma la trama ISO 8583 0200 (retiro con PIN block ISO 9564 formato 0 en el DE 52) en ASCII;
+// el TCP Sampler la envía como hexadecimal con un prefijo de longitud de 2 bytes.
+import java.time.LocalDateTime
+import java.time.format.DateTimeFormatter
+
+int terminal = ctx.getThreadNum() + 1
+long secuencia = (vars.get('SECUENCIA') ?: '0') as long
+secuencia++
+vars.put('SECUENCIA', String.valueOf(secuencia))
+
+String pan = String.format('4888%012d', terminal)
+String cuenta = String.format('LOAD-%04d', terminal)
+String stan = String.format('%06d', secuencia % 1000000L)
+// RRN (12): corrida (4) + terminal (3) + secuencia (5), en base 36
+String rrn = (props.get('CORRIDA') ?: '0000') +
+        Long.toString(terminal, 36).toUpperCase().padLeft(3, '0') +
+        Long.toString(secuencia, 36).toUpperCase().padLeft(5, '0')
+LocalDateTime ahora = LocalDateTime.now()
+
+// PIN block ISO-0: (0 | longitud | PIN | F...) XOR (0000 | 12 dígitos del PAN sin el verificador)
+String pin = vars.get('PIN')
+String campoPin = ('0' + Integer.toHexString(pin.length()).toUpperCase() + pin + ('F' * 14)).substring(0, 16)
+String campoPan = '0000' + pan.substring(pan.length() - 13, pan.length() - 1)
+StringBuilder pinBlock = new StringBuilder(16)
+for (int i = 0; i &lt; 16; i++) {
+    pinBlock.append(Integer.toHexString(Character.digit(campoPin.charAt(i), 16) ^ Character.digit(campoPan.charAt(i), 16)).toUpperCase())
+}
+
+TreeMap&lt;Integer, String&gt; campos = new TreeMap&lt;&gt;()
+campos.put(2, String.format('%02d', pan.length()) + pan)                    // PAN (LLVAR)
+campos.put(3, vars.get('PROC_CODE'))                                         // Processing Code
+campos.put(4, String.format('%012d', vars.get('MONTO_CENTAVOS') as long))    // Monto en centavos
+campos.put(7, ahora.format(DateTimeFormatter.ofPattern('MMddHHmmss')))
+campos.put(11, stan)                                                         // STAN
+campos.put(12, ahora.format(DateTimeFormatter.ofPattern('HHmmss')))
+campos.put(13, ahora.format(DateTimeFormatter.ofPattern('MMdd')))
+campos.put(37, rrn)                                                          // RRN
+campos.put(41, 'JMETER01')                                                   // Terminal ID
+campos.put(49, '320')                                                        // Moneda GTQ
+campos.put(52, pinBlock.toString())                                          // PIN block
+campos.put(102, String.format('%02d', cuenta.length()) + cuenta)             // Cuenta (LLVAR)
+
+// Bitmap primario (y secundario si hay campos &gt; 64) en hexadecimal ASCII
+boolean secundario = campos.lastKey() &gt; 64
+byte[] bitmap = new byte[secundario ? 16 : 8]
+if (secundario) {
+    bitmap[0] = (byte) (bitmap[0] | 0x80)
+}
+for (Integer n : campos.keySet()) {
+    int i = (n - 1).intdiv(8)
+    bitmap[i] = (byte) (bitmap[i] | (0x80 &gt;&gt; ((n - 1) % 8)))
+}
+String trama = 'ISO015000050' + '0200' + bitmap.encodeHex().toString().toUpperCase() + campos.values().join('')
+vars.put('TRAMA_HEX', trama.getBytes('US-ASCII').encodeHex().toString())
+vars.put('RRN', rrn)
+</stringProp>
+          </JSR223PreProcessor>
+          <hashTree/>
+          <JSR223Assertion guiclass="TestBeanGUI" testclass="JSR223Assertion" testname="Respuesta 0210 con DE 39 = 00" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">// Decodifica la respuesta (hexadecimal -&gt; ASCII), valida el MTI 0210 y el DE 39 = 00
+String hex = prev.getResponseDataAsString()
+if (hex == null || hex.isEmpty()) {
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage('Sin respuesta del Recolector')
+    return
+}
+String r = new String(hex.decodeHex(), 'US-ASCII')
+int pos = r.startsWith('ISO') ? 12 : 0
+String mti = r.substring(pos, pos + 4)
+pos += 4
+int bits = Character.digit(r.charAt(pos), 16) &gt;= 8 ? 128 : 64
+String bitmapHex = r.substring(pos, pos + bits.intdiv(4))
+pos += bits.intdiv(4)
+BigInteger bitmap = new BigInteger(bitmapHex, 16)
+// Longitudes de los campos que pueden preceder al DE 39 en la respuesta 0210
+Map&lt;Integer, Integer&gt; fijos = [3: 6, 4: 12, 7: 10, 11: 6, 12: 6, 13: 4, 14: 4, 22: 3, 25: 2, 37: 12, 38: 6]
+String de39 = null
+for (int n = 2; n &lt;= 39; n++) {
+    if (!bitmap.testBit(bits - n)) {
+        continue
+    }
+    if (n == 39) {
+        de39 = r.substring(pos, pos + 2)
+    } else if (n == 2) {
+        pos += 2 + Integer.parseInt(r.substring(pos, pos + 2))
+    } else {
+        pos += fijos.get(n)
+    }
+}
+prev.setResponseCode(de39 ?: 'SIN_DE39')
+if (mti != '0210' || de39 != '00') {
+    AssertionResult.setFailure(true)
+    AssertionResult.setFailureMessage('MTI ' + mti + ', DE 39 = ' + de39 + ' (RRN ' + vars.get('RRN') + ')')
+}
+</stringProp>
+          </JSR223Assertion>
           <hashTree/>
         </hashTree>
-        <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Reporte Resumen (Throughput TPS, Latencias p95/p99)" enabled="true">
+        <ResultCollector guiclass="SummaryReport" testclass="ResultCollector" testname="Resumen (Throughput = TPS)" enabled="true">
           <boolProp name="ResultCollector.error_logging">false</boolProp>
           <objProp>
             <name>saveConfig</name>
@@ -91,13 +310,12 @@
               <assertionsResultsToSave>0</assertionsResultsToSave>
               <bytes>true</bytes>
               <sentBytes>true</sentBytes>
-              <url>true</url>
               <threadCounts>true</threadCounts>
               <idleTime>true</idleTime>
               <connectTime>true</connectTime>
             </value>
           </objProp>
-          <stringProp name="filename">target/load-test-results.jtl</stringProp>
+          <stringProp name="filename"></stringProp>
         </ResultCollector>
         <hashTree/>
       </hashTree>

@@ -235,6 +235,8 @@
                                 <buildArg>--static-nolibc</buildArg>
                                 <!-- Instrucciones de CPU genéricas: el binario corre en cualquier x86-64 -->
                                 <buildArg>-march=compatibility</buildArg>
+                                <!-- El driver de SQL Server decodifica VARCHAR con la intercalación de la BD (Cp1252) -->
+                                <buildArg>-H:+AddAllCharsets</buildArg>
                                 <buildArg>-H:+ReportExceptionStackTraces</buildArg>
                                 <buildArg>--enable-monitoring=heapdump,jfr</buildArg>
                             </buildArgs>

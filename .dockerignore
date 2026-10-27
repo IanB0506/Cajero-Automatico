@@ -9,3 +9,5 @@ target/
 docker-compose.yml
 postman_collection.json
 init_sqlserver.sql
+reportes/
+Dockerfile*

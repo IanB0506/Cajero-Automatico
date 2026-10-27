@@ -1,23 +1,53 @@
 {
   "info": {
-    "_postman_id": "c8a4918e-42b7-4b19-9132-7a2e4e150001",
-    "name": "RED NEXUS - Pasarela Transaccional ISO 8583 & Core Multibanca",
-    "description": "Colección oficial y actualizada para la pasarela financiera RED NEXUS (Spring Boot 3.3.4, Java 21 Virtual Threads Loom, Microsoft SQL Server 'CoreBancario5B' y Sockets TCP ISO 8583 :15000).\n\nIncluye pruebas para transacciones ISO 8583 (0100/0110, 0200/0210, 0420/0430, 0800/0810), administración CRUD de cuentas multibanca en SQL Server, métricas Loom y pruebas de estrés con ráfagas concurrentes.",
+    "name": "RED NEXUS - Recolector ISO 8583 y Core Bancario",
+    "description": "Pruebas de la pasarela ISO 8583 (simulador /api/iso), del Core Bancario (/api/core), de la seguridad (HTTP Basic y X-API-Key) y de las métricas. Ejecutar la carpeta completa con el Collection Runner: cada petición trae pruebas automáticas.\n\nPIN de las cuentas semilla: 3001=1234, 3002=4321, 3003=2222, 3004=9999, 3005=1111.",
     "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
   },
   "variable": [
     {
       "key": "baseUrl",
-      "value": "http://localhost:8087",
-      "type": "string"
+      "value": "http://localhost:8087"
+    },
+    {
+      "key": "adminUser",
+      "value": "admin"
+    },
+    {
+      "key": "adminPassword",
+      "value": "Nexus2026_Admin"
+    },
+    {
+      "key": "apiKey",
+      "value": "nexus-core-api-key-desarrollo"
+    },
+    {
+      "key": "stan",
+      "value": ""
+    },
+    {
+      "key": "rrn",
+      "value": ""
+    },
+    {
+      "key": "rrnRetiro",
+      "value": ""
+    },
+    {
+      "key": "stanIdem",
+      "value": ""
+    },
+    {
+      "key": "rrnIdem",
+      "value": ""
     }
   ],
   "item": [
     {
-      "name": "01 - Transacciones Financieras ISO 8583 (/api/iso)",
+      "name": "01 - Transacciones ISO 8583 (/api/iso)",
       "item": [
         {
-          "name": "01. Retiro de Efectivo ATM (MTI 0200 - Q. 100.00 Banco Industrial)",
+          "name": "01. Retiro ATM Q100 con PIN (MTI 0200 -> 0210)",
           "request": {
             "method": "POST",
             "header": [
@@ -26,10 +56,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"mti\": \"0200\",\n  \"pan\": \"4532000000000001\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100201\",\n  \"rrn\": \"262700000001\",\n  \"moneda\": \"GTQ\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/iso/simular",
               "host": [
@@ -41,11 +67,50 @@
                 "simular"
               ]
             },
-            "description": "Envía una solicitud financiera MTI 0200 para retiro de efectivo en cajero automático. El switch valida saldo en SQL Server, debita la cuenta y retorna MTI 0210 con código de aprobación 00 y desglose de DE 54."
-          }
+            "description": "Retiro de Carlos Pérez. El Recolector arma el PIN block ISO 9564 formato 0 (DE 52) con el PIN y el PAN; el Core lo valida contra el hash SHA-256. Guarda el RRN para la reversa (petición 04).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"pan\": \"4532000000000001\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"pin\": \"1234\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 00', () => pm.expect(r.codigoRespuestaIso).to.eql('00'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));",
+                  "pm.test('Respuesta 0210 con DE 38 y DE 54', () => { pm.expect(r.mtiRespuesta).to.eql('0210'); pm.expect(r.codigoAutorizacion).to.have.lengthOf(6); });",
+                  "pm.test('La trama enviada lleva el DE 52', () => pm.expect(Object.keys(r.dataElementsEnviados).join(',')).to.include('52'));",
+                  "pm.collectionVariables.set('rrnRetiro', r.rrn);"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "02. Consulta de Saldo en Pantalla (MTI 0100 - G&T Continental)",
+          "name": "02. Retiro con PIN incorrecto (DE 39 = 55)",
           "request": {
             "method": "POST",
             "header": [
@@ -54,10 +119,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"mti\": \"0100\",\n  \"pan\": \"5412000000000002\",\n  \"cuenta\": \"1001-2002-3002\",\n  \"monto\": 0.0,\n  \"processingCode\": \"300000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100202\",\n  \"rrn\": \"262700000002\",\n  \"moneda\": \"GTQ\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/iso/simular",
               "host": [
@@ -69,11 +130,47 @@
                 "simular"
               ]
             },
-            "description": "Envía una solicitud de autorización MTI 0100 (Processing Code 300000) para consulta de saldo en cuenta. Retorna MTI 0110 con saldo contable y disponible."
-          }
+            "description": "Tres PIN incorrectos seguidos bloquean la tarjeta (DE 39 = 75). Un PIN correcto reinicia el contador.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 50.0,\n  \"processingCode\": \"010000\",\n  \"pin\": \"0000\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 55', () => pm.expect(r.codigoRespuestaIso).to.eql('55'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "03. Reversa Automática por Falla de Dispensador (MTI 0420)",
+          "name": "03. Consulta de saldo (MTI 0100 -> 0110)",
           "request": {
             "method": "POST",
             "header": [
@@ -82,10 +179,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"mti\": \"0420\",\n  \"pan\": \"4532000000000001\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100203\",\n  \"rrn\": \"262700000003\",\n  \"moneda\": \"GTQ\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/iso/simular",
               "host": [
@@ -97,11 +190,48 @@
                 "simular"
               ]
             },
-            "description": "Genera una trama de reversa MTI 0420 para devolver el dinero a la cuenta del usuario en SQL Server tras un fallo mecánico simulado."
-          }
+            "description": "Consulta de María Gómez: el saldo disponible y contable regresan en el DE 54.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0100\",\n  \"cuenta\": \"1001-2002-3002\",\n  \"monto\": 0,\n  \"processingCode\": \"300000\",\n  \"pin\": \"4321\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 00', () => pm.expect(r.codigoRespuestaIso).to.eql('00'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));",
+                  "pm.test('Saldo disponible informado', () => pm.expect(r.saldoDisponible).to.be.a('number'));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "04. Prueba de Red y Heartbeat Echo Test (MTI 0800)",
+          "name": "04. Reversa del retiro 01 (MTI 0420 -> 0430)",
           "request": {
             "method": "POST",
             "header": [
@@ -110,10 +240,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"mti\": \"0800\",\n  \"pan\": \"4532000000000001\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 0.0,\n  \"processingCode\": \"000000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100204\",\n  \"rrn\": \"262700000004\",\n  \"moneda\": \"GTQ\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/iso/simular",
               "host": [
@@ -125,11 +251,46 @@
                 "simular"
               ]
             },
-            "description": "Verifica el estado del enlace y disponibilidad del switch transaccional enviando una trama de administración de red MTI 0800."
-          }
+            "description": "Reversa por falla del dispensador: DE 37 = RRN del retiro original (guardado por la petición 01). Devuelve el saldo una sola vez; una segunda reversa del mismo RRN no vuelve a acreditar.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0420\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"rrn\": \"{{rrnRetiro}}\",\n  \"stan\": \"{{stan}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 00', () => pm.expect(r.codigoRespuestaIso).to.eql('00'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));",
+                  "pm.test('Respuesta 0430', () => pm.expect(r.mtiRespuesta).to.eql('0430'));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "05. Rechazo por Fondos Insuficientes (Código ISO 51)",
+          "name": "05. Echo test de red (MTI 0800 -> 0810)",
           "request": {
             "method": "POST",
             "header": [
@@ -138,10 +299,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"mti\": \"0200\",\n  \"pan\": \"4000000000000005\",\n  \"cuenta\": \"1001-2002-3005\",\n  \"monto\": 50000.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100205\",\n  \"rrn\": \"262700000005\",\n  \"moneda\": \"GTQ\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/iso/simular",
               "host": [
@@ -153,11 +310,47 @@
                 "simular"
               ]
             },
-            "description": "Solicita un monto de Q. 50,000.00 que supera el saldo disponible. El sistema rechaza con código ISO 51 (Fondos Insuficientes)."
-          }
+            "description": "Network management (DE 70 = 301).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0800\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"monto\": 0,\n  \"processingCode\": \"000000\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 00', () => pm.expect(r.codigoRespuestaIso).to.eql('00'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "06. Rechazo por Tarjeta Bloqueada (Código ISO 67 - BAC)",
+          "name": "06. Transferencia Q25 entre cuentas (DE 3 = 40, DE 103)",
           "request": {
             "method": "POST",
             "header": [
@@ -166,10 +359,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"mti\": \"0200\",\n  \"pan\": \"4000000000000004\",\n  \"cuenta\": \"1001-2002-3004\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"terminalId\": \"ATMNX001\",\n  \"stan\": \"100206\",\n  \"rrn\": \"262700000006\",\n  \"moneda\": \"GTQ\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/iso/simular",
               "host": [
@@ -181,16 +370,360 @@
                 "simular"
               ]
             },
-            "description": "Intenta operar con una tarjeta en estado BLOCKED. El sistema rechaza inmediatamente con código ISO 67."
-          }
+            "description": "Débito de la cuenta origen (DE 102) y crédito de la cuenta destino (DE 103) en la misma transacción.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"cuenta\": \"1001-2002-3001\",\n  \"cuentaDestino\": \"1001-2002-3002\",\n  \"monto\": 25.0,\n  \"processingCode\": \"400000\",\n  \"pin\": \"1234\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 00', () => pm.expect(r.codigoRespuestaIso).to.eql('00'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "07. Fondos insuficientes (DE 39 = 51)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Pedro Ramos tiene Q10.00 de saldo y Q100.00 de límite diario (un monto mayor al límite responde 61).",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"cuenta\": \"1001-2002-3005\",\n  \"monto\": 50.0,\n  \"processingCode\": \"010000\",\n  \"pin\": \"1111\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 51', () => pm.expect(r.codigoRespuestaIso).to.eql('51'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "08. Tarjeta bloqueada (DE 39 = 05)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Cuenta de Ana Morales en estado BLOCKED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"cuenta\": \"1001-2002-3004\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"pin\": \"9999\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 05', () => pm.expect(r.codigoRespuestaIso).to.eql('05'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "09. Tarjeta expirada (DE 39 = 54)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Cuenta de Juan López en estado EXPIRED.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"cuenta\": \"1001-2002-3003\",\n  \"monto\": 100.0,\n  \"processingCode\": \"010000\",\n  \"pin\": \"2222\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 54', () => pm.expect(r.codigoRespuestaIso).to.eql('54'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "10. Cuenta inexistente (DE 39 = 14)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "La cuenta del DE 102 no existe en el Core Bancario.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"cuenta\": \"9999-9999-9999\",\n  \"monto\": 10.0,\n  \"processingCode\": \"010000\",\n  \"pin\": \"1234\",\n  \"stan\": \"{{stan}}\",\n  \"rrn\": \"{{rrn}}\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const r = pm.response.json();",
+                  "pm.test('DE 39 = 14', () => pm.expect(r.codigoRespuestaIso).to.eql('14'));",
+                  "pm.test('El PIN no viaja en claro en la respuesta', () => pm.expect(pm.response.text()).to.not.include('\"pin\"'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "11. Retransmisión idempotente (mismo RRN y STAN)",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/iso/simular",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "iso",
+                "simular"
+              ]
+            },
+            "description": "Envía dos veces la misma trama (mismo RRN/STAN). La segunda respuesta es la misma (mismo DE 38) y el saldo se descuenta una sola vez.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"mti\": \"0200\",\n  \"cuenta\": \"1001-2002-3002\",\n  \"monto\": 10.0,\n  \"processingCode\": \"010000\",\n  \"pin\": \"4321\",\n  \"terminalId\": \"ATMNX001\",\n  \"moneda\": \"GTQ\",\n  \"stan\": \"{{stanIdem}}\",\n  \"rrn\": \"{{rrnIdem}}\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.collectionVariables.set('stanIdem', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrnIdem', '27' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "const primera = pm.response.json();",
+                  "pm.test('Primera respuesta aprobada', () => pm.expect(primera.codigoRespuestaIso).to.eql('00'));",
+                  "pm.sendRequest({ url: pm.request.url.toString(), method: 'POST',",
+                  "  header: { 'Content-Type': 'application/json' },",
+                  "  body: { mode: 'raw', raw: pm.variables.replaceIn(pm.request.body.raw) } }, (err, res) => {",
+                  "  const segunda = res.json();",
+                  "  pm.test('La retransmisión devuelve la misma autorización', () => {",
+                  "    pm.expect(segunda.codigoRespuestaIso).to.eql('00');",
+                  "    pm.expect(segunda.codigoAutorizacion).to.eql(primera.codigoAutorizacion);",
+                  "    pm.expect(segunda.saldoDisponible).to.eql(primera.saldoDisponible);",
+                  "  });",
+                  "});"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      "name": "02 - Core Bancario Multibanca SQL Server (/api/core)",
+      "name": "02 - Core Bancario (/api/core)",
       "item": [
         {
-          "name": "01. Listar Todas las Cuentas en SQL Server",
+          "name": "01. Listar cuentas (público, sin PIN)",
           "request": {
             "method": "GET",
             "header": [],
@@ -205,11 +738,26 @@
                 "cuentas"
               ]
             },
-            "description": "Retorna la lista de todas las cuentas y tarjetas registradas en Microsoft SQL Server (CoreBancario5B)."
-          }
+            "description": "Consulta pública: la respuesta nunca incluye el PIN ni su hash.",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));",
+                  "pm.test('Sin PIN en la respuesta', () => pm.expect(pm.response.text()).to.not.match(/\"pin/i));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "02. Consultar Cuenta por Número de Cuenta o PAN",
+          "name": "02. Consultar cuenta por número o PAN",
           "request": {
             "method": "GET",
             "header": [],
@@ -225,11 +773,151 @@
                 "1001-2002-3001"
               ]
             },
-            "description": "Obtiene el detalle individual de una cuenta por su identificador único."
-          }
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "03. Crear Nueva Cuenta Bancaria Multibanca",
+          "name": "03. Movimientos de una cuenta",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3001/transacciones?limite=10",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas",
+                "1001-2002-3001",
+                "transacciones"
+              ],
+              "query": [
+                {
+                  "key": "limite",
+                  "value": "10"
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04. Historial de transacciones",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/transacciones?limite=50",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "transacciones"
+              ],
+              "query": [
+                {
+                  "key": "limite",
+                  "value": "50"
+                }
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "05. Verificar credenciales de administrador",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/admin/sesion",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "admin",
+                "sesion"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Sesión de ADMIN', () => pm.expect(pm.response.json().rol).to.eql('ADMIN'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "06. Crear cuenta con PIN (ADMIN)",
           "request": {
             "method": "POST",
             "header": [
@@ -238,10 +926,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"numeroCuenta\": \"1001-2002-3099\",\n  \"titular\": \"ALEJANDRO ESCOBAR\",\n  \"pan\": \"4532000000003099\",\n  \"pin\": \"7777\",\n  \"saldoDisponible\": 1500.0,\n  \"limiteDiario\": 500.0,\n  \"banco\": \"BANCO INDUSTRIAL\",\n  \"estado\": \"ACTIVE\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/core/cuentas",
               "host": [
@@ -253,11 +937,46 @@
                 "cuentas"
               ]
             },
-            "description": "Inserta una nueva cuenta en la tabla [cuentas] de SQL Server con su respectivo banco y saldo."
-          }
+            "description": "El PIN se guarda como hash SHA-256 ('numero_cuenta:PIN'); nunca se devuelve.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titular\": \"CLIENTE POSTMAN\",\n  \"numeroCuenta\": \"1001-2002-3099\",\n  \"pan\": \"4532000000003099\",\n  \"saldoInicial\": 2500.0,\n  \"limiteDiario\": 1000.0,\n  \"estado\": \"ACTIVE\",\n  \"pin\": \"2468\",\n  \"banco\": \"BANCO INDUSTRIAL\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 201', () => pm.response.to.have.status(201));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "04. Editar Datos o Estado de Cuenta",
+          "name": "07. Editar cuenta y cambiar PIN (ADMIN)",
           "request": {
             "method": "PUT",
             "header": [
@@ -266,10 +985,6 @@
                 "value": "application/json"
               }
             ],
-            "body": {
-              "mode": "raw",
-              "raw": "{\n  \"titular\": \"ALEJANDRO ESCOBAR\",\n  \"pin\": \"7777\",\n  \"saldoDisponible\": 2000.0,\n  \"limiteDiario\": 1000.0,\n  \"estado\": \"ACTIVE\",\n  \"banco\": \"BANCO INDUSTRIAL\"\n}"
-            },
             "url": {
               "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3099",
               "host": [
@@ -282,16 +997,51 @@
                 "1001-2002-3099"
               ]
             },
-            "description": "Actualiza la información financiera y el estado de la cuenta en SQL Server."
-          }
+            "description": "Omitir 'pin' conserva el PIN actual.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titular\": \"CLIENTE POSTMAN EDITADO\",\n  \"limiteDiario\": 1500.0,\n  \"saldoDisponible\": 3000.0,\n  \"estado\": \"ACTIVE\",\n  \"pin\": \"1357\",\n  \"banco\": \"BANCO INDUSTRIAL\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "05. Alternar Bloqueo de Tarjeta (Toggle Lock)",
+          "name": "08. Bloquear / desbloquear tarjeta (ADMIN)",
           "request": {
             "method": "POST",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3001/toggle-bloqueo",
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3099/toggle-bloqueo",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -299,20 +1049,46 @@
                 "api",
                 "core",
                 "cuentas",
-                "1001-2002-3001",
+                "1001-2002-3099",
                 "toggle-bloqueo"
               ]
             },
-            "description": "Alterna el estado de la cuenta entre ACTIVE y BLOCKED de forma inmediata en SQL Server."
-          }
+            "description": "",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "06. Recargar Saldo a Cuenta",
+          "name": "09. Recargar saldo (ADMIN)",
           "request": {
             "method": "POST",
             "header": [],
             "url": {
-              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3001/recargar?monto=500.00",
+              "raw": "{{baseUrl}}/api/core/cuentas/1001-2002-3099/recargar?monto=500.00",
               "host": [
                 "{{baseUrl}}"
               ],
@@ -320,7 +1096,7 @@
                 "api",
                 "core",
                 "cuentas",
-                "1001-2002-3001",
+                "1001-2002-3099",
                 "recargar"
               ],
               "query": [
@@ -330,11 +1106,37 @@
                 }
               ]
             },
-            "description": "Inyecta fondos adicionales a la cuenta y los persiste en SQL Server."
-          }
+            "description": "",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "07. Eliminar Cuenta Bancaria",
+          "name": "10. Eliminar cuenta (ADMIN)",
           "request": {
             "method": "DELETE",
             "header": [],
@@ -350,30 +1152,37 @@
                 "1001-2002-3099"
               ]
             },
-            "description": "Elimina la cuenta especificada de la base de datos SQL Server."
-          }
-        },
-        {
-          "name": "08. Listar Historial de Transacciones Auditadas",
-          "request": {
-            "method": "GET",
-            "header": [],
-            "url": {
-              "raw": "{{baseUrl}}/api/core/transacciones",
-              "host": [
-                "{{baseUrl}}"
-              ],
-              "path": [
-                "api",
-                "core",
-                "transacciones"
+            "description": "",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
               ]
-            },
-            "description": "Consulta el libro de auditoría transaccional de SQL Server (STAN, RRN, montos, saldos anterior/posterior y autorizaciones)."
-          }
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 204', () => pm.response.to.have.status(204));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "09. Restablecer Cuentas a Estado Inicial de Prueba",
+          "name": "11. Restablecer datos de prueba (ADMIN)",
           "request": {
             "method": "POST",
             "header": [],
@@ -388,16 +1197,259 @@
                 "reset"
               ]
             },
-            "description": "Restaura las 6 cuentas oficiales (BI, G&T, Banrural, BAC, Promerica, BAM) a sus saldos iniciales."
-          }
+            "description": "Restaura las 5 cuentas semilla y borra el historial.",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         }
       ]
     },
     {
-      "name": "03 - Métricas, Concurrencia Loom & Diagnóstico",
+      "name": "03 - Seguridad",
       "item": [
         {
-          "name": "01. Métricas Operativas del Switch y Virtual Threads",
+          "name": "01. Alta de cuenta sin credenciales -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/cuentas",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "cuentas"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"titular\": \"SIN PERMISO\",\n  \"numeroCuenta\": \"0000-0000-0001\",\n  \"pan\": \"4000000000009991\",\n  \"saldoInicial\": 1,\n  \"limiteDiario\": 1,\n  \"pin\": \"1234\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "02. Core directo con X-API-Key del Recolector",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/transacciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "transacciones"
+              ]
+            },
+            "description": "Contrato REST Recolector -> Core (lo que envía el RestClient). Respuesta con DE 39 en 'codigoRespuesta'.",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rrn\": \"{{rrn}}\",\n  \"stan\": \"{{stan}}\",\n  \"cuentaOrigen\": \"1001-2002-3002\",\n  \"monto\": 5.0,\n  \"tipoOperacion\": \"COMPRA\",\n  \"terminalId\": \"POSTMAN1\",\n  \"codigoProcesamiento\": \"000000\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "apikey",
+              "apikey": [
+                {
+                  "key": "key",
+                  "value": "X-API-Key",
+                  "type": "string"
+                },
+                {
+                  "key": "value",
+                  "value": "{{apiKey}}",
+                  "type": "string"
+                },
+                {
+                  "key": "in",
+                  "value": "header",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('Aprobada (00)', () => pm.expect(pm.response.json().codigoRespuesta).to.eql('00'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "03. Core directo sin API Key -> 401",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "url": {
+              "raw": "{{baseUrl}}/api/core/transacciones",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "api",
+                "core",
+                "transacciones"
+              ]
+            },
+            "description": "",
+            "body": {
+              "mode": "raw",
+              "raw": "{\n  \"rrn\": \"{{rrn}}\",\n  \"stan\": \"{{stan}}\",\n  \"cuentaOrigen\": \"1001-2002-3002\",\n  \"monto\": 5.0,\n  \"tipoOperacion\": \"COMPRA\"\n}",
+              "options": {
+                "raw": {
+                  "language": "json"
+                }
+              }
+            },
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "// STAN (DE 11) y RRN (DE 37) únicos por envío",
+                  "pm.collectionVariables.set('stan', String(Math.floor(100000 + Math.random() * 900000)));",
+                  "pm.collectionVariables.set('rrn', '26' + String(Date.now()).slice(-10));"
+                ]
+              }
+            },
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04. Actuator metrics sin credenciales -> 401",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/metrics",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics"
+              ]
+            },
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 401', () => pm.response.to.have.status(401));"
+                ]
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "name": "04 - Métricas y salud",
+      "item": [
+        {
+          "name": "01. Métricas del switch y Virtual Threads",
           "request": {
             "method": "GET",
             "header": [],
@@ -412,11 +1464,25 @@
                 "metricas"
               ]
             },
-            "description": "Retorna métricas del recolector: transacciones procesadas/aprobadas/rechazadas, estado del socket TCP :15000, Virtual Threads Loom y memoria JVM."
-          }
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "02. Disparar Ráfaga Concurrente (50 Hilos Virtuales)",
+          "name": "02. Ráfaga concurrente (50 Virtual Threads)",
           "request": {
             "method": "POST",
             "header": [],
@@ -437,11 +1503,25 @@
                 }
               ]
             },
-            "description": "Ejecuta 50 transacciones simultáneas utilizando Java 21 Virtual Threads (Project Loom) y mide latencia P50, P95 y TPS calculados."
-          }
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200', () => pm.response.to.have.status(200));"
+                ]
+              }
+            }
+          ]
         },
         {
-          "name": "03. Estado de Salud del Sistema (Actuator Health)",
+          "name": "03. Salud (incluye el socket TCP ISO 8583)",
           "request": {
             "method": "GET",
             "header": [],
@@ -455,8 +1535,67 @@
                 "health"
               ]
             },
-            "description": "Verifica que la conexión JDBC contra Microsoft SQL Server y el espacio de almacenamiento del servidor se encuentren UP."
-          }
+            "description": "",
+            "auth": {
+              "type": "noauth"
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('UP', () => pm.expect(pm.response.json().status).to.eql('UP'));"
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "04. Pausas del GC (ADMIN)",
+          "request": {
+            "method": "GET",
+            "header": [],
+            "url": {
+              "raw": "{{baseUrl}}/actuator/metrics/jvm.gc.pause",
+              "host": [
+                "{{baseUrl}}"
+              ],
+              "path": [
+                "actuator",
+                "metrics",
+                "jvm.gc.pause"
+              ]
+            },
+            "description": "En modo JVM (ZGC) devuelve las pausas del GC. El binario nativo (Serial GC) no emite notificaciones de GC, por lo que ahí la métrica no existe (404).",
+            "auth": {
+              "type": "basic",
+              "basic": [
+                {
+                  "key": "username",
+                  "value": "{{adminUser}}",
+                  "type": "string"
+                },
+                {
+                  "key": "password",
+                  "value": "{{adminPassword}}",
+                  "type": "string"
+                }
+              ]
+            }
+          },
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "type": "text/javascript",
+                "exec": [
+                  "pm.test('HTTP 200 (JVM) o 404 (nativo)', () => pm.expect(pm.response.code).to.be.oneOf([200, 404]));"
+                ]
+              }
+            }
+          ]
         }
       ]
     }

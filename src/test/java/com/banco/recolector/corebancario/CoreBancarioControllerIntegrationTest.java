@@ -2,6 +2,7 @@ package com.banco.recolector.corebancario;
 
 import com.banco.recolector.IntegracionBase;
 import com.banco.recolector.corebancario.entity.CuentaEntity;
+import com.banco.recolector.corebancario.service.PinHasher;
 import com.banco.recolector.iso.PinBlock;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -149,10 +150,31 @@ class CoreBancarioControllerIntegrationTest extends IntegracionBase {
     }
 
     @Test
-    @DisplayName("Reset del entorno de demostración solo para administrador")
+    @DisplayName("Reset (solo administrador): restaura saldo, estado y PIN de las cuentas semilla y recrea las borradas")
     void testReset() {
         assertEquals(401, llamar(POST, "/api/core/reset", null).status());
+
+        String pedro = "/api/core/cuentas/1001-2002-3005";
+        assertEquals(200, comoAdmin(PUT, pedro, Map.of("saldoDisponible", 999, "estado", "BLOCKED", "pin", "8888")).status());
+        CuentaEntity alterada = cuenta("1001-2002-3005");
+        alterada.setIntentosPinFallidos(2);
+        cuentaRepository.save(alterada);
+        assertEquals(204, comoAdmin(DELETE, "/api/core/cuentas/1001-2002-3002", null).status());
+
         assertEquals(200, comoAdmin(POST, "/api/core/reset", null).status());
+
+        CuentaEntity restaurada = cuenta("1001-2002-3005");
+        assertEquals(new BigDecimal("10.00"), restaurada.getSaldoDisponible());
+        assertEquals(new BigDecimal("10.00"), restaurada.getSaldoContable());
+        assertEquals("ACTIVE", restaurada.getEstado());
+        assertEquals(0, restaurada.getIntentosPinFallidos());
+        assertEquals(PinHasher.hash("1001-2002-3005", "1111"), restaurada.getPinHash());
+
+        CuentaEntity recreada = cuenta("1001-2002-3002");
+        assertEquals("5412000000000002", recreada.getPan());
+        assertEquals(new BigDecimal("350.00"), recreada.getSaldoDisponible());
+        assertEquals(PinHasher.hash("1001-2002-3002", "4321"), recreada.getPinHash());
+        assertEquals(0, transaccionRepository.count());
     }
 
     @Test

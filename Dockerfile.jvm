@@ -1,0 +1,59 @@
+# =====================================================================
+# Imagen JVM (alternativa de compilación rápida): Temurin 25 + ZGC
+#
+#   APP_DOCKERFILE=Dockerfile.jvm   (en el archivo .env)
+#   docker compose up -d --build
+# =====================================================================
+
+# ---------------------------------------------------------------------
+# Etapa 1 (deps): Maven + JDK 25; dependencias en caché
+# ---------------------------------------------------------------------
+FROM maven:3.9-eclipse-temurin-25 AS deps
+
+# Modo batch con el progreso de descargas visible y reintentos ante cortes de red
+ENV MAVEN_ARGS="-B -Daether.connector.requestTimeout=60000 -Daether.connector.http.retryHandler.count=5"
+
+WORKDIR /workspace
+# Primero solo el pom.xml: las dependencias quedan en caché mientras no cambie
+COPY pom.xml .
+RUN mvn dependency:go-offline
+COPY src ./src
+
+# ---------------------------------------------------------------------
+# Etapa opcional (test): suite completa + cobertura sobre H2 en memoria
+#   docker compose --profile tests run --rm tests
+# ---------------------------------------------------------------------
+FROM deps AS test
+# Corre una prueba para dejar en la imagen los plugins de JUnit/Surefire/JaCoCo
+RUN mvn test -Dtest=IsoParserUnitTest
+CMD ["mvn", "verify"]
+
+# ---------------------------------------------------------------------
+# Etapa 2 (build): JAR ejecutable
+# ---------------------------------------------------------------------
+FROM deps AS build
+RUN mvn package -DskipTests
+
+# ---------------------------------------------------------------------
+# Etapa final (runtime): solo JRE 25 + el JAR, con usuario sin privilegios
+# ---------------------------------------------------------------------
+FROM eclipse-temurin:25-jre AS runtime
+WORKDIR /app
+
+RUN groupadd --system recolector && useradd --system --gid recolector --no-create-home recolector
+
+COPY --from=build /workspace/target/*.jar /app/app.jar
+
+USER recolector
+
+# 8087 = Web / API REST / Actuator (cambiable con SERVER_PORT), 15000 = Socket TCP ISO 8583
+EXPOSE 8087 15000
+
+ENV SERVER_PORT=8087
+# ZGC generacional (único modo de ZGC desde JDK 24): pausas sub-milisegundo
+ENV JAVA_OPTS="-XX:+UseZGC -XX:MaxRAMPercentage=75"
+
+HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=5 \
+  CMD curl -fsS "http://localhost:${SERVER_PORT}/actuator/health" > /dev/null || exit 1
+
+ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]

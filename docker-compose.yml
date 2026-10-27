@@ -1,9 +1,13 @@
 # Levanta el proyecto completo: SQL Server + creación de la BD + Recolector ISO 8583.
 #
 #   docker compose up -d --build                    -> arrancar todo
-#   docker compose --profile tests run --rm tests   -> ejecutar las pruebas
+#   docker compose --profile tests run --rm tests   -> ejecutar las pruebas (+ cobertura)
 #
-# Contraseña, puertos y zona horaria se configuran en el archivo .env
+# Imagen de la app (variable APP_DOCKERFILE del archivo .env):
+#   Dockerfile      -> binario nativo GraalVM 25 sobre Distroless (por defecto)
+#   Dockerfile.jvm  -> JAR sobre Temurin 25 con ZGC (compilación más rápida)
+#
+# Contraseñas, credenciales, puertos y zona horaria se configuran en el archivo .env
 name: cajero-automatico
 
 services:
@@ -46,7 +50,9 @@ services:
         echo ">>> Base de datos CoreBancario5B lista"
 
   app:
-    build: .
+    build:
+      context: .
+      dockerfile: ${APP_DOCKERFILE:-Dockerfile}
     container_name: cajero-app
     depends_on:
       db-init:
@@ -56,6 +62,9 @@ services:
       SPRING_DATASOURCE_USERNAME: sa
       SPRING_DATASOURCE_PASSWORD: ${MSSQL_SA_PASSWORD}
       SERVER_PORT: ${APP_HTTP_PORT}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      CORE_API_KEY: ${CORE_API_KEY}
       TZ: ${TZ}
     ports:
       - "${APP_HTTP_PORT}:${APP_HTTP_PORT}"
@@ -65,8 +74,12 @@ services:
   tests:
     build:
       context: .
+      dockerfile: ${APP_DOCKERFILE:-Dockerfile}
       target: test
     profiles: ["tests"]
+    volumes:
+      # Reporte de cobertura JaCoCo accesible en ./reportes/jacoco/index.html
+      - ./reportes:/workspace/target/site
 
 volumes:
   sqlserver-data:
