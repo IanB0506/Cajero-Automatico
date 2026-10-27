@@ -85,7 +85,7 @@ Cuando `docker compose ps` muestre `cajero-app` como **healthy**, abre **http://
 | Detener (conserva los datos) | `docker compose down` |
 | Detener y borrar la BD | `docker compose down -v` |
 | Recompilar después de cambiar el código | `docker compose up -d --build` |
-| Pruebas automatizadas + cobertura | `docker compose --profile tests run --rm tests` |
+| Pruebas automatizadas + cobertura | `docker compose --profile tests run --rm --build tests` |
 | Prueba de carga JMeter | `docker compose --profile carga run --rm jmeter` |
 
 Contraseñas, credenciales, puertos y zona horaria están en **`.env`**:
@@ -100,6 +100,40 @@ Contraseñas, credenciales, puertos y zona horaria están en **`.env`**:
 | `CARGA_TERMINALES` / `CARGA_DURACION` | `200` / `60` | Prueba de carga JMeter |
 
 Si cambias `MSSQL_SA_PASSWORD` después del primer arranque, ejecuta `docker compose down -v` para recrear la BD.
+
+### Verificar que todo funciona (lista de comprobación)
+
+Ejecutar en **Símbolo del sistema (CMD)**, dentro de la carpeta del proyecto. En PowerShell, escribe `curl.exe` en lugar de `curl`.
+
+| # | Qué se verifica | Comando | Resultado esperado |
+|---|---|---|---|
+| 1 | Contenedores | `docker compose ps` | `cajero-app` y `cajero-sqlserver` **healthy**; `cajero-db-init` **Exited (0)** |
+| 2 | Arranque | `docker compose logs app \| findstr "Started"` | `Started RecolectorApplication in X seconds` |
+| 3 | Salud (BD y socket TCP) | `curl http://localhost:8087/actuator/health` | `"status":"UP"` con `db` y `tcpIso` en `UP` |
+| 4 | Retiro con PIN correcto | ver abajo | `"codigoRespuestaIso":"00"` y `"mtiRespuesta":"0210"` |
+| 5 | Retiro con PIN incorrecto | el mismo comando con `\"pin\":\"0000\"` | `"codigoRespuestaIso":"55"` |
+| 6 | Seguridad: sin credenciales | `curl -i -X POST http://localhost:8087/api/core/reset` | `HTTP/1.1 401` |
+| 7 | Seguridad: administrador | `curl -u admin:Nexus2026_Admin http://localhost:8087/api/core/admin/sesion` | `{"usuario":"admin","rol":"ADMIN"}` |
+| 8 | Restaurar datos de prueba | `curl -u admin:Nexus2026_Admin -X POST http://localhost:8087/api/core/reset` | `Cuentas restauradas al estado inicial.` |
+| 9 | Pruebas automatizadas (unos minutos) | `docker compose --profile tests run --rm --build tests` | `Tests run: 119, Failures: 0, Errors: 0` y `BUILD SUCCESS` |
+| 10 | Reporte de cobertura | `start reportes\jacoco\index.html` | Cobertura de líneas mayor que 80 % |
+| 11 | Postman | Importar `postman_collection.json` → *Run collection* | 30 peticiones y 46 pruebas en verde |
+| 12 | Prueba de carga (unos 2 min) | `docker compose --profile carga run --rm jmeter` | `Err: 0 (0.00%)` en la última línea `summary =` |
+| 13 | Reporte de carga | `start reportes\jmeter\html\index.html` | TPS en la columna *Throughput* de la fila **0200 Retiro ISO 8583** (la línea `summary =` incluye el alta y la baja de cuentas y da un valor menor) |
+| 14 | Interfaz web | Abrir http://localhost:8087 | Retiro con el PIN de la cuenta → aprobado; PIN incorrecto → 55 |
+
+Comando del paso 4 (una sola línea):
+
+```cmd
+curl -X POST http://localhost:8087/api/iso/simular -H "Content-Type: application/json" -d "{\"mti\":\"0200\",\"cuenta\":\"1001-2002-3001\",\"monto\":100,\"processingCode\":\"010000\",\"pin\":\"1234\"}"
+```
+
+Notas:
+
+- Antes de correr Postman, restaura los datos (paso 8 o botón **Restaurar datos**): la colección espera las cuentas de demostración en su estado inicial.
+- Para una prueba de carga más corta: `set CARGA_TERMINALES=50` y `set CARGA_DURACION=30` antes del paso 12 (en PowerShell: `$env:CARGA_TERMINALES=50`). Al terminar, el plan borra las cuentas `LOAD-xxxx` que creó; el historial de transacciones se limpia con **Restaurar datos**.
+- Para saber si corre la versión nativa: `docker compose logs app | findstr "AOT-processed"` muestra una línea solo en el binario nativo. En la versión nativa, `docker exec cajero-app sh` falla porque Distroless no tiene shell.
+- Si algo falla: `docker compose logs app` (o `docker compose logs db-init`). Para empezar de cero: `docker compose down -v` y luego `docker compose up -d --build`.
 
 ---
 
@@ -197,7 +231,7 @@ Flujo de un retiro (0200):
 ## 5. Pruebas y cobertura
 
 ```powershell
-docker compose --profile tests run --rm tests
+docker compose --profile tests run --rm --build tests
 ```
 
 Ejecuta `mvn verify` sobre H2 en memoria (modo MSSQL) en un contenedor y deja el reporte de cobertura en **`reportes/jacoco/index.html`**. Con JDK 25 y Maven instalados también se puede correr `mvn verify` directamente.
@@ -228,6 +262,7 @@ El reporte HTML queda en **`reportes/jmeter/html/index.html`**; el TPS es la col
 Qué hace el plan (`src/test/resources/load-test-iso8583.jmx`):
 
 - **setUp:** crea por HTTP (con credenciales de administrador) una cuenta por terminal: `LOAD-0001`… con saldo Q1,000,000 y PIN 1234 (si ya existen las reutiliza).
+- **tearDown:** al terminar borra esas cuentas (con `-Jlimpiar=false` se conservan).
 - **Carga:** cada hilo es una terminal con una **conexión TCP persistente** que envía retiros 0200 con **PIN block en el DE 52**, usando `LengthPrefixedBinaryTCPClientImpl` (prefijo de 2 bytes).
 - **Aserción:** la respuesta debe ser **0210 con DE 39 = 00**; el DE 39 se guarda como código de respuesta de cada muestra.
 
@@ -237,7 +272,7 @@ Para ejecutarlo con un JMeter instalado en Windows, usa **Java 17 o 21** para JM
 jmeter -n -t src\test\resources\load-test-iso8583.jmx -Jterminales=200 -Jduracion=60 -l resultados.jtl -e -o reporte-carga
 ```
 
-Parámetros (`-J`): `host`, `tcpPort`, `httpPort`, `adminUser`, `adminPassword`, `terminales`, `rampa`, `duracion`, `procCode`, `montoCentavos`, `pin`.
+Parámetros (`-J`): `host`, `tcpPort`, `httpPort`, `adminUser`, `adminPassword`, `terminales`, `rampa`, `duracion`, `procCode`, `montoCentavos`, `pin`, `limpiar`.
 
 ---
 
@@ -295,7 +330,7 @@ Demostración sugerida (15 minutos):
    - Consola ISO 8583 (panel de administración): tramas enviada y recibida, bitmap y DE 39 de una transacción.
    - Postman Runner: 30 peticiones en verde (incluye retransmisión idempotente y 401 sin credenciales).
 3. **Nativo y Distroless (3 min):** `Dockerfile` multi-etapa; `IsoAotRuntimeHints`; `docker images` (tamaño); `docker exec cajero-app sh` falla porque no existe shell (superficie de ataque mínima); usuario `nonroot`.
-4. **Pruebas y métricas (4 min):** `docker compose --profile tests run --rm tests` → reporte JaCoCo; `docker compose --profile carga run --rm jmeter` → reporte HTML; tabla de la sección 7 y explicación de la metodología y límites del equipo.
+4. **Pruebas y métricas (4 min):** `docker compose --profile tests run --rm --build tests` → reporte JaCoCo; `docker compose --profile carga run --rm jmeter` → reporte HTML; tabla de la sección 7 y explicación de la metodología y límites del equipo.
 5. **Cierre (1 min).**
 
 Preguntas probables y dónde está la respuesta: idempotencia ante duplicados simultáneos (`CoreBancarioService#procesar`), por qué no hay pinning (sin `synchronized` en rutas de E/S, `ReentrantLock`; `LoadTestSimulationTest`), mapeo HTTP → DE 39 (`CoreBancarioClient#codigoPorEstadoHttp`), formato del PIN block (`PinBlock`).

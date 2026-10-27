@@ -1,7 +1,7 @@
 # Levanta el proyecto completo: SQL Server + creación de la BD + Recolector ISO 8583.
 #
 #   docker compose up -d --build                    -> arrancar todo
-#   docker compose --profile tests run --rm tests   -> ejecutar las pruebas (+ cobertura)
+#   docker compose --profile tests run --rm --build tests   -> ejecutar las pruebas (+ cobertura)
 #   docker compose --profile carga run --rm jmeter  -> prueba de carga ISO 8583 con JMeter
 #
 # Imagen de la app (variable APP_DOCKERFILE del archivo .env):
@@ -102,6 +102,8 @@ services:
       - "-Jduracion=${CARGA_DURACION:-60}"
     volumes:
       - ./reportes:/reportes
+      # El plan se lee de la carpeta del proyecto: los cambios al .jmx no requieren reconstruir la imagen
+      - ./src/test/resources/load-test-iso8583.jmx:/plan/load-test-iso8583.jmx:ro
 
 volumes:
   sqlserver-data:

@@ -500,7 +500,7 @@ Cualquier ruta ADMIN sin credenciales válidas          -> 401 (sin cabecera WWW
 <pre>docker compose up -d --build                      # SQL Server + creación de la BD + aplicación
 docker compose ps                                 # cajero-app debe quedar "healthy"
 docker compose logs -f app                        # registros (incluye el tiempo de arranque)
-docker compose --profile tests run --rm tests     # pruebas + cobertura en reportes/jacoco
+docker compose --profile tests run --rm --build tests     # pruebas + cobertura en reportes/jacoco
 docker compose --profile carga run --rm jmeter    # prueba de carga, reporte en reportes/jmeter/html
 docker compose down                               # detener (conserva datos)
 docker compose down -v                            # detener y borrar la base de datos</pre>
@@ -582,8 +582,8 @@ mvn -Pnative -DskipTests package           # binario nativo target/recolector (G
     </tbody>
   </table>
   <h3>Prueba de carga</h3>
-  <p><code>src/test/resources/load-test-iso8583.jmx</code> crea una cuenta por terminal y envía retiros 0200 con PIN block
-    por conexiones TCP persistentes, verificando 0210 con DE 39 = 00. Se ejecuta con
+  <p><code>src/test/resources/load-test-iso8583.jmx</code> crea una cuenta por terminal, envía retiros 0200 con PIN block
+    por conexiones TCP persistentes verificando 0210 con DE 39 = 00, y al terminar borra esas cuentas. Se ejecuta con
     <code>docker compose --profile carga run --rm jmeter</code> o con un JMeter local sobre Java 17/21. Los resultados
     medidos y su metodología están en <code>DOCUMENTACION.md</code>.</p>
 </section>

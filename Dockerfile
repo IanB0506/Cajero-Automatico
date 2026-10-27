@@ -29,7 +29,7 @@ COPY src ./src
 
 # ---------------------------------------------------------------------
 # Etapa opcional (test): suite completa + cobertura sobre H2 en memoria
-#   docker compose --profile tests run --rm tests
+#   docker compose --profile tests run --rm --build tests
 # ---------------------------------------------------------------------
 FROM deps AS test
 # Corre una prueba para dejar en la imagen los plugins de JUnit/Surefire/JaCoCo

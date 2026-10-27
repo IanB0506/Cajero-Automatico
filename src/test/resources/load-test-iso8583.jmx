@@ -5,9 +5,10 @@
   Modo consola (recomendado para medir TPS) con reporte HTML:
     jmeter -n -t load-test-iso8583.jmx -l resultados.jtl -e -o reporte-carga
   Parámetros (-J): host, tcpPort, httpPort, adminUser, adminPassword, terminales, rampa, duracion,
-                   procCode, montoCentavos, pin. Ejemplo: -Jterminales=400 -Jduracion=120
+                   procCode, montoCentavos, pin, limpiar. Ejemplo: -Jterminales=400 -Jduracion=120
 
   setUp: crea por HTTP una cuenta por terminal (LOAD-0001 .., saldo Q1,000,000, PIN 1234).
+  tearDown: borra esas cuentas al terminar (-Jlimpiar=false para conservarlas).
   Carga: cada hilo es una terminal con una conexión TCP persistente que envía tramas 0200
   con prefijo de longitud de 2 bytes (LengthPrefixedBinaryTCPClientImpl) y PIN block en el DE 52;
   la aserción valida que la respuesta sea 0210 con DE 39 = 00. El TPS es la columna Throughput.
@@ -85,6 +86,12 @@
             <stringProp name="Argument.name">PIN</stringProp>
             <stringProp name="Argument.value">${__P(pin,1234)}</stringProp>
             <stringProp name="Argument.desc">PIN de las cuentas de carga (viaja en el DE 52)</stringProp>
+            <stringProp name="Argument.metadata">=</stringProp>
+          </elementProp>
+          <elementProp name="LIMPIAR" elementType="Argument">
+            <stringProp name="Argument.name">LIMPIAR</stringProp>
+            <stringProp name="Argument.value">${__P(limpiar,true)}</stringProp>
+            <stringProp name="Argument.desc">Borrar las cuentas LOAD-xxxx al terminar (tearDown)</stringProp>
             <stringProp name="Argument.metadata">=</stringProp>
           </elementProp>
         </collectionProp>
@@ -317,6 +324,56 @@ if (mti != '0210' || de39 != '00') {
           </objProp>
           <stringProp name="filename"></stringProp>
         </ResultCollector>
+        <hashTree/>
+      </hashTree>
+      <PostThreadGroup guiclass="PostThreadGroupGui" testclass="PostThreadGroup" testname="tearDown - Limpieza de cuentas de carga" enabled="true">
+        <stringProp name="ThreadGroup.on_sample_error">continue</stringProp>
+        <elementProp name="ThreadGroup.main_controller" elementType="LoopController" guiclass="LoopControlPanel" testclass="LoopController" testname="Bucle" enabled="true">
+          <boolProp name="LoopController.continue_forever">false</boolProp>
+          <stringProp name="LoopController.loops">1</stringProp>
+        </elementProp>
+        <stringProp name="ThreadGroup.num_threads">1</stringProp>
+        <stringProp name="ThreadGroup.ramp_time">1</stringProp>
+        <boolProp name="ThreadGroup.scheduler">false</boolProp>
+        <stringProp name="ThreadGroup.duration"></stringProp>
+        <stringProp name="ThreadGroup.delay"></stringProp>
+        <boolProp name="ThreadGroup.same_user_on_next_iteration">true</boolProp>
+      </PostThreadGroup>
+      <hashTree>
+        <JSR223Sampler guiclass="TestBeanGUI" testclass="JSR223Sampler" testname="Baja de cuentas de carga (HTTP Basic)" enabled="true">
+            <stringProp name="scriptLanguage">groovy</stringProp>
+            <stringProp name="parameters"></stringProp>
+            <stringProp name="filename"></stringProp>
+            <stringProp name="cacheKey">true</stringProp>
+            <stringProp name="script">// tearDown: borra las cuentas de carga (LOAD-0001 .. LOAD-n) para no dejar datos de prueba en el Core
+import java.net.http.HttpClient
+import java.net.http.HttpRequest
+import java.net.http.HttpResponse
+
+if (!Boolean.parseBoolean(vars.get('LIMPIAR'))) {
+    SampleResult.setResponseData('Limpieza desactivada (-Jlimpiar=false): las cuentas LOAD-xxxx se conservan', 'UTF-8')
+    return
+}
+String base = 'http://' + vars.get('HOST') + ':' + vars.get('HTTP_PORT')
+String auth = 'Basic ' + (vars.get('ADMIN_USER') + ':' + vars.get('ADMIN_PASSWORD')).getBytes('UTF-8').encodeBase64().toString()
+int terminales = vars.get('TERMINALES') as int
+HttpClient cliente = HttpClient.newHttpClient()
+int borradas = 0
+for (int i = 1; i &lt;= terminales; i++) {
+    HttpResponse&lt;String&gt; r = cliente.send(HttpRequest.newBuilder(URI.create(base + '/api/core/cuentas/' + String.format('LOAD-%04d', i)))
+            .header('Authorization', auth).DELETE().build(), HttpResponse.BodyHandlers.ofString())
+    if (r.statusCode() == 204) {
+        borradas++
+    } else if (r.statusCode() != 404) {
+        SampleResult.setSuccessful(false)
+        SampleResult.setResponseCode(String.valueOf(r.statusCode()))
+        SampleResult.setResponseMessage('Baja de LOAD-' + i + ' rechazada: HTTP ' + r.statusCode())
+        return
+    }
+}
+SampleResult.setResponseData('Cuentas de carga eliminadas: ' + borradas, 'UTF-8')
+</stringProp>
+          </JSR223Sampler>
         <hashTree/>
       </hashTree>
     </hashTree>
