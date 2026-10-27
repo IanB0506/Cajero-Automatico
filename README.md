@@ -57,6 +57,18 @@ La primera vez tarda unos **10-15 minutos**: descarga SQL Server, las dependenci
 
 > **¿Poca memoria o prisa?** En `.env` cambia `APP_DOCKERFILE=Dockerfile` por `APP_DOCKERFILE=Dockerfile.jvm` y vuelve a ejecutar `docker compose up -d --build`. Se construye la versión JVM (Temurin 25 + ZGC) en ~2 minutos. Todo lo demás funciona igual.
 
+**Compilación nativa en Windows: memoria de Docker.** Durante la compilación nativa el log muestra `[1/8] Initializing...` y `Build resources: X GB of memory`, y luego puede pasar varios minutos sin imprimir nada: no está congelada, está analizando el código y usa todos los procesadores (la PC se pone lenta mientras tanto). Si `Build resources` indica **menos de 6 GB**, la compilación puede tardar más de 20 minutos o fallar por falta de memoria. Para darle más memoria a Docker Desktop (backend WSL 2):
+
+1. Cancela con `Ctrl+C` y ejecuta `docker compose down`.
+2. `notepad "%UserProfile%\.wslconfig"` y escribe (ajusta según tu RAM; deja al menos 4 GB para Windows):
+   ```
+   [wsl2]
+   memory=8GB
+   ```
+3. `wsl --shutdown`, vuelve a abrir Docker Desktop y ejecuta otra vez `docker compose up -d --build`.
+
+Con el backend Hyper-V la memoria se ajusta en Docker Desktop → *Settings* → *Resources*. La imagen nativa queda en caché: solo la primera compilación es pesada.
+
 `docker compose` levanta, en orden:
 
 | Contenedor | Función | Puerto en Windows |
