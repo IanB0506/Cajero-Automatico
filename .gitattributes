@@ -1,0 +1,6 @@
+# Finales de línea LF para lo que se usa dentro de contenedores Linux (también al clonar en Windows)
+Dockerfile*   text eol=lf
+*.yml         text eol=lf
+*.sql         text eol=lf
+*.jmx         text eol=lf
+.env          text eol=lf

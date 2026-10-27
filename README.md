@@ -1,28 +1,42 @@
-# Recolector Transaccional de Alto Rendimiento ISO 8583
+# Recolector Transaccional ISO 8583 de Alto Rendimiento
 
-> **Curso:** Desarrollo Web Avanzado y Arquitecturas de Alto Rendimiento con Spring Boot 4.1  
-> **Requisitos Técnicos:** Java 21+ (LTS / Java 25 Ready), Spring Boot 4.1 / Spring Framework 6.x, Jakarta EE 11, GraalVM Native Image 25, Generational ZGC  
-> **Estándar Financiero:** ISO 8583:1987 / 1993 (MTI 0200, 0210, 0100, 0110, 0420, 0430, 0800, 0810)  
+Switch transaccional que recibe tramas **ISO 8583** por **TCP**, las traduce a un **Core Bancario REST** (SQL Server) y devuelve la respuesta ISO con el código de acción en el **DE 39**. Incluye un cajero automático web para la demostración, binario nativo **GraalVM 25** sobre **Distroless**, pruebas automatizadas con cobertura **> 80 %** y un plan de carga **JMeter**.
+
+| Componente | Versión |
+|---|---|
+| Java | 25 (Virtual Threads, Records, Pattern Matching) |
+| Spring Boot / Framework | 4.1.2 / 7.0 (RestClient, `RetryTemplate` del core) |
+| Spring Integration IP | 7.1 (servidor TCP con prefijo de longitud de 2 bytes) |
+| Jakarta EE | 11 (`jakarta.inject`, `jakarta.annotation`, `jakarta.validation`, `jakarta.persistence`) |
+| Motor ISO 8583 | j8583 1.17 (`j8583.xml`) |
+| Base de datos | SQL Server 2022 (H2 en modo MSSQL solo para pruebas) |
+| Imagen nativa | GraalVM Native Image 25 → `gcr.io/distroless/cc-debian12:nonroot` |
+| GC en JVM | Generational ZGC |
+| Pruebas | JUnit 6, AssertJ, Mockito, MockMvc, WireMock 3, JaCoCo, JFR |
+| Carga | Apache JMeter 5.6.3 |
+
+La documentación técnica (decisiones de diseño, formato de las tramas, metodología y resultados de las mediciones) está en **[DOCUMENTACION.md](DOCUMENTACION.md)**.
 
 ---
 
-## 📋 Tabla de Contenido
-0. [Inicio Rápido con Docker (Windows)](#0-inicio-rápido-con-docker-windows)
-1. [Descripción del Proyecto y Objetivos](#1-descripción-del-proyecto-y-objetivos)
-2. [Arquitectura del Sistema & Flujo Transaccional](#2-arquitectura-del-sistema--flujo-transaccional)
-3. [Cumplimiento de la Rúbrica de Evaluación (100%)](#3-cumplimiento-de-la-rúbrica-de-evaluación-100)
-4. [Estructura del Repositorio](#4-estructura-del-repositorio)
-5. [Motor ISO 8583 y Data Elements (DE)](#5-motor-iso-8583-y-data-elements-de)
-6. [Core Bancario & Adaptador RestClient Resiliente](#6-core-bancario--adaptador-restclient-resiliente)
-7. [Compilación AOT, GraalVM y Docker](#7-compilación-aot-graalvm-y-docker)
-8. [Reporte Técnico de Pruebas y Métricas de Rendimiento](#8-reporte-técnico-de-pruebas-y-métricas-de-rendimiento)
-9. [Guía de Defensa del Proyecto (Presentación Oral 15 Minutos)](#9-guía-de-defensa-del-proyecto-presentación-oral-15-minutos)
+## Contenido
+
+1. [Inicio rápido con Docker (Windows)](#1-inicio-rápido-con-docker-windows)
+2. [Uso: cajero web, API, Postman y socket TCP](#2-uso-cajero-web-api-postman-y-socket-tcp)
+3. [Arquitectura](#3-arquitectura)
+4. [Cumplimiento de la guía del proyecto](#4-cumplimiento-de-la-guía-del-proyecto)
+5. [Pruebas y cobertura](#5-pruebas-y-cobertura)
+6. [Prueba de carga con JMeter](#6-prueba-de-carga-con-jmeter)
+7. [Resultados medidos](#7-resultados-medidos)
+8. [Ejecución sin Docker (desarrollo)](#8-ejecución-sin-docker-desarrollo)
+9. [Guía para la defensa](#9-guía-para-la-defensa)
+10. [Estructura del repositorio](#10-estructura-del-repositorio)
 
 ---
 
-## 0. Inicio Rápido con Docker (Windows)
+## 1. Inicio rápido con Docker (Windows)
 
-Solo se necesita **Docker Desktop** (con el backend WSL 2 y contenedores Linux, que es su configuración por defecto). No hace falta instalar Java, Maven ni SQL Server.
+Solo se necesita **Docker Desktop** (backend WSL 2, contenedores Linux). No hace falta instalar Java, Maven ni SQL Server.
 
 ```powershell
 git clone https://github.com/IanB0506/Cajero-Automatico.git
@@ -30,372 +44,260 @@ cd Cajero-Automatico
 docker compose up -d --build
 ```
 
-La primera vez tarda varios minutos (descarga SQL Server y las dependencias de Maven). `docker compose` levanta, en orden:
+La primera vez tarda unos **10-15 minutos**: descarga SQL Server, las dependencias de Maven y compila el **binario nativo** (la compilación nativa sola tarda 5-10 minutos y usa mucha memoria; asigna al menos **8 GB** a Docker Desktop / WSL 2). Las siguientes veces solo se recompila lo que cambió.
+
+> **¿Poca memoria o prisa?** En `.env` cambia `APP_DOCKERFILE=Dockerfile` por `APP_DOCKERFILE=Dockerfile.jvm` y vuelve a ejecutar `docker compose up -d --build`. Se construye la versión JVM (Temurin 25 + ZGC) en ~2 minutos. Todo lo demás funciona igual.
+
+`docker compose` levanta, en orden:
 
 | Contenedor | Función | Puerto en Windows |
 |---|---|---|
-| `cajero-sqlserver` | SQL Server 2022 con los datos en el volumen `sqlserver-data` | `localhost,14333` |
-| `cajero-db-init` | Crea la BD `CoreBancario5B` y ejecuta `init_sqlserver.sql`; termina al acabar (`Exited (0)` es lo esperado) | — |
-| `cajero-app` | Recolector ISO 8583 + Core Bancario + interfaz web | `8087` (web) y `15000` (TCP) |
+| `cajero-sqlserver` | SQL Server 2022 (datos en el volumen `sqlserver-data`) | `localhost,14333` |
+| `cajero-db-init` | Crea `CoreBancario5B` y ejecuta `init_sqlserver.sql` (idempotente); termina con `Exited (0)` | — |
+| `cajero-app` | Recolector ISO 8583 + Core Bancario + cajero web (binario nativo en Distroless) | `8087` (HTTP) y `15000` (TCP) |
 
-Cuando `docker compose ps` muestre `cajero-app` como **healthy**:
-
-- **Cajero ATM (interfaz web):** http://localhost:8087
-- **Salud:** http://localhost:8087/actuator/health
-- **Postman:** importar `postman_collection.json` (ya trae `baseUrl = http://localhost:8087`)
-- **Socket ISO 8583:** `localhost:15000` (prefijo de 2 bytes con la longitud de la trama)
-- **SQL Server (SSMS / Azure Data Studio):** servidor `localhost,14333`, usuario `sa`, contraseña definida en `.env`
+Cuando `docker compose ps` muestre `cajero-app` como **healthy**, abre **http://localhost:8087**.
 
 | Acción | Comando |
 |---|---|
-| Ver los logs de la aplicación | `docker compose logs -f app` |
+| Ver los logs (incluye el tiempo de arranque) | `docker compose logs -f app` |
 | Detener (conserva los datos) | `docker compose down` |
-| Detener y borrar la BD (vuelve a las 5 cuentas iniciales) | `docker compose down -v` |
+| Detener y borrar la BD | `docker compose down -v` |
 | Recompilar después de cambiar el código | `docker compose up -d --build` |
-| Ejecutar las 18 pruebas automatizadas | `docker compose --profile tests run --rm tests` |
+| Pruebas automatizadas + cobertura | `docker compose --profile tests run --rm tests` |
+| Prueba de carga JMeter | `docker compose --profile carga run --rm jmeter` |
 
-La contraseña de `sa`, los puertos y la zona horaria se configuran en el archivo **`.env`**. Si los puertos 8087, 15000 o 14333 ya están ocupados en el equipo (por ejemplo, porque la aplicación también corre fuera de Docker), cámbialos ahí. Si se cambia la contraseña después del primer arranque, hay que ejecutar `docker compose down -v` para recrear la BD.
+Contraseñas, credenciales, puertos y zona horaria están en **`.env`**:
+
+| Variable | Valor por defecto | Uso |
+|---|---|---|
+| `APP_DOCKERFILE` | `Dockerfile` | `Dockerfile` (nativo) o `Dockerfile.jvm` |
+| `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `Nexus2026_Admin` | Login de administración (web y API, HTTP Basic) |
+| `CORE_API_KEY` | `nexus-core-api-key-desarrollo` | Cabecera `X-API-Key` del Recolector hacia el Core |
+| `MSSQL_SA_PASSWORD` | `Nexus2026_Pass` | Usuario `sa` de SQL Server (fijada al crear el volumen) |
+| `APP_HTTP_PORT` / `APP_TCP_PORT` / `SQLSERVER_PORT` | `8087` / `15000` / `14333` | Puertos publicados en Windows |
+| `CARGA_TERMINALES` / `CARGA_DURACION` | `200` / `60` | Prueba de carga JMeter |
+
+Si cambias `MSSQL_SA_PASSWORD` después del primer arranque, ejecuta `docker compose down -v` para recrear la BD.
 
 ---
 
-## 1. Descripción del Proyecto y Objetivos
+## 2. Uso: cajero web, API, Postman y socket TCP
 
-Las redes financieras tradicionales (Puntos de Venta POS, Cajeros Automáticos ATM y pasarelas adquirentes) operan mediante **sockets TCP/IP** transmitiendo tramas binarias y ASCII bajo el estándar **ISO 8583**. En contraste, los núcleos bancarios modernos (**Core Banking**) exponen interfaces **API REST cloud-native** basadas en JSON.
+### Cuentas de demostración
 
-Este proyecto implementa un **Recolector Transaccional y Switch Financiero de Ultra-Baja Latencia** que:
-1. Recibe solicitudes financieras **MTI 0200** y administrativas vía TCP/IP no bloqueante asistido por **Virtual Threads (Project Loom)**.
-2. Desempaqueta y valida tramas ISO 8583 extrayendo los Data Elements críticos (**DE 3, DE 4, DE 11, DE 37, DE 102**).
-3. Asegura **idempotencia estricta** mediante el RRN (*Retrieval Reference Number*) y STAN (*System Trace Audit Number*).
-4. Invoca de forma desacoplada y resiliente al Core Bancario mediante **Spring RestClient** y DTOs inmutables (**Java Records**), mapeando excepciones HTTP a códigos de acción **DE 39**.
-5. Compila mediante **GraalVM Native Image AOT** en una imagen minificada **Distroless nonroot** sin shell, alcanzando arranque en **<100 ms**, memoria **RSS <45 MB** y pausas de GC **$\le 1$ ms** con **Generational ZGC**.
+| Cuenta | PAN | Titular | Saldo | Límite diario | Estado | PIN |
+|---|---|---|---|---|---|---|
+| 1001-2002-3001 | 4532000000000001 | Carlos Pérez | Q1,500.00 | Q500.00 | ACTIVE | 1234 |
+| 1001-2002-3002 | 5412000000000002 | María Gómez | Q350.00 | Q300.00 | ACTIVE | 4321 |
+| 1001-2002-3003 | 4000000000000003 | Juan López | Q500.00 | Q200.00 | EXPIRED | 2222 |
+| 1001-2002-3004 | 4000000000000004 | Ana Morales | Q1,000.00 | Q500.00 | BLOCKED | 9999 |
+| 1001-2002-3005 | 4000000000000005 | Pedro Ramos | Q10.00 | Q100.00 | ACTIVE | 1111 |
+
+El PIN se guarda solo como hash SHA-256; la interfaz y la API nunca lo muestran. **Administración → Restaurar** (o `POST /api/core/reset`) devuelve estas cuentas a sus valores iniciales y limpia el historial.
+
+### Cajero web (http://localhost:8087)
+
+1. Clic en la ranura de tarjeta → elegir una cuenta.
+2. Teclear el PIN (teclado en pantalla o físico). El PIN viaja dentro de la trama como **PIN block ISO 9564 formato 0 (DE 52)**.
+3. Operaciones: retiro (0200), consulta de saldo (0100), **reversa del último retiro** (0420 con el RRN original), echo test (0800) y estado de cuenta.
+4. Un PIN incorrecto responde **DE 39 = 55** y vuelve a pedirlo; al tercer intento la tarjeta se bloquea (**DE 39 = 75**).
+5. **Acceso Administrador** (usuario/contraseña de `.env`, validados por el servidor): alta, edición (incluido cambio de PIN), recargas, bloqueo, borrado y restauración de cuentas; historial de transacciones; consola para inyectar tramas.
+
+### API REST
+
+| Método y ruta | Acceso | Descripción |
+|---|---|---|
+| `POST /api/iso/simular` | público | Arma una trama ISO 8583, la procesa como si llegara por TCP y devuelve tramas, bitmap y DE 39 |
+| `GET /api/iso/metricas`, `POST /api/iso/rafaga?cantidad=50` | público | Métricas del switch y ráfaga concurrente en Virtual Threads |
+| `POST /api/core/transacciones` | `X-API-Key` (Recolector) o ADMIN | Contrato Recolector → Core; responde el DE 39 en `codigoRespuesta` |
+| `GET /api/core/cuentas[/{id}]`, `GET /api/core/cuentas/{id}/transacciones`, `GET /api/core/transacciones` | público | Consultas (sin PIN) |
+| `POST/PUT/DELETE /api/core/cuentas...`, `.../recargar`, `.../toggle-bloqueo`, `POST /api/core/reset` | ADMIN (HTTP Basic) | Administración |
+| `GET /actuator/health` | público | Incluye el estado del socket TCP (`tcpIso`) y de la BD |
+| `GET /actuator/metrics/**` | ADMIN | Métricas (pausas de GC en modo JVM) |
+
+### Postman
+
+Importa `postman_collection.json` (variables `baseUrl`, `adminUser`, `adminPassword` y `apiKey` ya configuradas) y ejecútala completa con el **Collection Runner**: 30 peticiones con pruebas automáticas (retiro con PIN, PIN incorrecto, consulta, reversa del retiro, transferencia, rechazos 51/05/54/14, retransmisión idempotente, administración y seguridad 401).
+
+### Socket TCP ISO 8583 (`localhost:15000`)
+
+Cada trama va precedida por **2 bytes con su longitud** (big-endian, sin signo); la respuesta usa el mismo enmarcado sobre la misma conexión, que puede quedar abierta (keep-alive). Formato ASCII con bitmap hexadecimal y cabecera opcional `ISO015000050`. Detalle de los campos en [DOCUMENTACION.md](DOCUMENTACION.md#3-formato-de-las-tramas).
 
 ---
 
-## 2. Arquitectura del Sistema & Flujo Transaccional
+## 3. Arquitectura
 
 ```mermaid
-flowchart TD
-    subgraph Adquirencia ["Red de Adquirencia (Sockets TCP)"]
-        POS["Terminal POS (Datáfono)"]
-        ATM["Cajero Automático ATM"]
+flowchart LR
+    T["Terminales ATM/POS<br/>(JMeter, cajero web, pruebas)"] -- "TCP :15000<br/>prefijo 2 bytes" --> GW
+    subgraph APP["Recolector (Spring Boot 4.1 · Java 25 · nativo GraalVM)"]
+        GW["Spring Integration IP<br/>TcpNetServerConnectionFactory<br/>1 Virtual Thread por conexión"] --> REC["RecolectorTransaccionalService<br/>j8583: parseo DE 3/4/11/37/102/52"]
+        REC --> IDEM["IdempotenciaService<br/>caché RRN+STAN"]
+        REC --> CLI["CoreBancarioClient<br/>RestClient + RetryTemplate<br/>X-API-Key"]
+        WEB["Cajero web / API /api/iso"] --> REC
     end
-
-    subgraph Recolector ["Recolector Transaccional Spring Boot 4.1"]
-        TCP["Servidor TCP (Puerto 15000)<br/>ServerSocket Backlog=2048"]
-        Loom["Virtual Threads (Project Loom)<br/>Thread.ofVirtual() / Sin Pinning"]
-        Parser["Motor ISO 8583 (j8583 Engine)<br/>Parseo MTI 0200 / Bitmap / DE"]
-        Idemp["Servicio de Idempotencia<br/>ConcurrentHashMap Lock-Free (RRN+STAN)"]
-        Client["Adaptador RestClient (Spring 6 / Boot 4.1)<br/>DTOs Inmutables (Java Records)"]
-    end
-
-    subgraph CoreBancario ["Core Bancario Cloud-Native"]
-        RestApi["API REST /api/core/transacciones"]
-        ServiceCore["Lógica Contable de Cuentas"]
-        H2DB[("Base de Datos (H2 / PostgreSQL)<br/>Tablas: Cuentas y Transacciones")]
-    end
-
-    POS -->|Trama ISO 8583 (MTI 0200)| TCP
-    ATM -->|Trama ISO 8583 (MTI 0200)| TCP
-    TCP -->|1 Conexión = 1 Virtual Thread| Loom
-    Loom --> Parser
-    Parser --> Idemp
-    Idemp -->|Si ya existe| Loom
-    Idemp -->|Nueva Transacción| Client
-    Client -->|HTTP POST JSON (TransaccionCoreRequest)| RestApi
-    RestApi --> ServiceCore
-    ServiceCore -->|Débito / Crédito / Validaciones| H2DB
-    ServiceCore -->|HTTP 200 / 422 / 404 / 403 / 500| RestApi
-    RestApi --> Client
-    Client -->|Traducción HTTP a DE 39| Parser
-    Parser -->|Trama ISO 8583 (MTI 0210)| Loom
-    Loom -->|Envío de Respuesta TCP| POS
-    Loom -->|Envío de Respuesta TCP| ATM
+    CLI -- "HTTP JSON :8087/api/core" --> CORE["Core Bancario<br/>CoreBancarioService<br/>bloqueo pesimista + UNIQUE(RRN,STAN)"]
+    CORE --> DB[("SQL Server 2022<br/>CoreBancario5B")]
 ```
 
-### Garantía de Cero Carrier Thread Pinning
-- **Eliminación de `synchronized`:** No se utiliza la palabra clave `synchronized` en ninguna ruta crítica de E/S.
-- **Estructuras Concurrentes:** Se utiliza `ConcurrentHashMap`, `AtomicLong` y `AtomicBoolean` para operaciones concurrentes seguras sin bloquear los Carrier Threads de la JVM.
-- **Validación con Loom Tracing:** Verificado mediante el flag de depuración de la JVM:
-  ```bash
-  -Djdk.tracePinnedThreads=full
-  ```
-  Resultado: **0 trazas de pinning detectadas** bajo 2,000 hilos concurrentes.
+Flujo de un retiro (0200):
+
+1. La terminal envía la trama con su longitud; Spring Integration la entrega en un **Virtual Thread**.
+2. `RecolectorTransaccionalService` parsea con **j8583** y extrae DE 3 (tipo de operación), DE 4 (monto), DE 11 (STAN), DE 37 (RRN), DE 102 (cuenta) y DE 52 (PIN block). Una trama ilegible responde **DE 39 = 30**.
+3. Si el par **RRN + STAN** ya fue respondido (retransmisión), devuelve la misma respuesta sin volver a debitar.
+4. Arma un DTO inmutable (`record`) y lo envía al Core con **RestClient**; ante caída o HTTP 5xx reintenta con el **`RetryTemplate`** de Spring Framework 7 (seguro porque el Core es idempotente).
+5. El Core bloquea la fila de la cuenta (`UPDLOCK`), valida estado, PIN, saldo y límite diario, debita y registra la transacción en la misma transacción de BD. La restricción `UNIQUE(rrn, stan)` impide aplicar dos veces la misma transacción aunque lleguen duplicados simultáneos.
+6. El Recolector traduce la respuesta HTTP/JSON a la trama **0210** con DE 38 (autorización), **DE 39** y DE 54 (saldos).
 
 ---
 
-## 3. Cumplimiento de la Rúbrica de Evaluación (100%)
+## 4. Cumplimiento de la guía del proyecto
 
-| Criterio | Ponderación | Nivel Obtenido | Justificación Técnica |
-|---|:---:|:---:|---|
-| **1. Arquitectura Spring Boot 4.1 & Concurrencia** | **25%** | **Excelente (100%)** | `spring.threads.virtual.enabled=true`, delegación `Thread.ofVirtual()` en sockets TCP, sintaxis Java 21+ moderna (Records, Pattern Matching, Switch Expressions), namespace estricto `jakarta.*` (`jakarta.annotation.*`, `jakarta.inject.*`, `jakarta.validation.*`). Cero carrier-thread pinning. |
-| **2. Ingesta ISO 8583 y Mapeo Transaccional** | **20%** | **Excelente (100%)** | Decodificación y codificación completa de MTI 0200/0210, 0100/0110, 0420/0430 y 0800/0810 con j8583. Extracción rigurosa de DE 3, DE 4, DE 11, DE 37, DE 102. Enmascaramiento PCI-DSS en logs. Mapeo bidireccional exacto de respuesta a DE 39. |
-| **3. Adaptador REST & Resiliencia** | **20%** | **Excelente (100%)** | Implementación de `RestClient` HTTP no bloqueante con Records inmutables. Caché lock-free de idempotencia indexado por clave `RRN:STAN`. Captura y traducción de fallos HTTP (200 $\to$ 00, 422 $\to$ 51, 404 $\to$ 14, 403 $\to$ 05, 504 $\to$ 68, 500 $\to$ 91). |
-| **4. Compilación AOT, GraalVM & Docker Distroless** | **15%** | **Excelente (100%)** | `IsoAotRuntimeHints` implementando `RuntimeHintsRegistrar` para reflexión y lectura de `j8583.xml`. Dockerfile multi-etapa con GraalVM Native Image y contenedor final `gcr.io/distroless/cc-debian12:nonroot` sin shell y usuario `nonroot:nonroot` (UID 65532). Arranque nativo en **<100 ms**. |
-| **5. Calidad de Código, Pruebas y Despliegue** | **20%** | **Excelente (100%)** | 18 pruebas automatizadas (100% de éxito). Unitarias (j8583), Integración WireMock (7 escenarios HTTP), End-to-End sobre socket TCP real con balance contable, y prueba de carga con 2,000 transacciones concurrentes demostrando estabilidad, latencia sub-segundo y compatibilidad con Generational ZGC ($\le 1$ ms de pausa). |
-
----
-
-## 4. Estructura del Repositorio
-
-El proyecto cumple estrictamente con el árbol de directorios estipulado en la guía:
-
-```text
-├── src/
-│   ├── main/
-│   │   ├── java/com/banco/recolector/
-│   │   │   ├── RecolectorApplication.java       # Punto de entrada de la aplicación Spring Boot
-│   │   │   ├── config/                          # Configuración TCP, Virtual Threads y AOT Hints
-│   │   │   │   ├── TcpServerConfig.java         # Propiedades del servidor de sockets TCP
-│   │   │   │   ├── VirtualThreadsConfig.java    # Configuración de Project Loom y Executors
-│   │   │   │   └── IsoAotRuntimeHints.java      # RuntimeHintsRegistrar para GraalVM Native AOT
-│   │   │   ├── iso/                             # Parser j8583, Mappings MTI 0200/0210 y DE 39
-│   │   │   │   ├── IsoResponseCode.java         # Catálogo de códigos de respuesta DE 39
-│   │   │   │   ├── IsoTransactionDto.java       # DTO Inmutable (Record) con máscara PCI-DSS
-│   │   │   │   └── IsoMessageService.java       # Motor de empaquetado/desempaquetado j8583
-│   │   │   ├── corebancario/                    # RestClient, DTOs (Records) y adaptador API
-│   │   │   │   ├── CoreBancarioClient.java      # Cliente HTTP resiliente con RestClient
-│   │   │   │   ├── CuentaDto.java               # DTO Inmutable de cuentas
-│   │   │   │   ├── TransaccionCoreRequest.java  # DTO Inmutable (Record) de solicitud al Core
-│   │   │   │   ├── TransaccionCoreResponse.java # DTO Inmutable (Record) de respuesta del Core
-│   │   │   │   ├── controller/                  # Endpoints REST del Core Bancario
-│   │   │   │   │   └── CoreBancarioController.java
-│   │   │   │   ├── entity/                      # Entidades JPA (Cuentas y Transacciones)
-│   │   │   │   │   ├── CuentaEntity.java
-│   │   │   │   │   └── TransaccionEntity.java
-│   │   │   │   ├── repository/                  # Repositorios Spring Data JPA
-│   │   │   │   │   ├── CuentaRepository.java
-│   │   │   │   │   └── TransaccionRepository.java
-│   │   │   │   └── service/                     # Lógica transaccional contable
-│   │   │   │       └── CoreBancarioService.java
-│   │   │   └── service/                         # Orquestación transaccional e idempotencia
-│   │   │       ├── IdempotenciaService.java     # Caché de idempotencia lock-free (RRN:STAN)
-│   │   │       ├── RecolectorTransaccionalService.java # Orquestador central de negocio
-│   │   │       └── TcpIsoServer.java            # Servidor TCP multi-hilo con Virtual Threads
-│   │   └── resources/
-│   │       ├── application.yaml                 # Configuración del microservicio y Loom
-│   │       ├── j8583.xml                        # Mapeo de campos ISO 8583 para el parser
-│   │       └── META-INF/spring/aot.factories    # Registro AOT para GraalVM
-│   └── test/
-│       ├── java/com/banco/recolector/
-│       │   ├── RecolectorEndToEndTest.java      # Prueba E2E sobre socket TCP y BD real H2
-│       │   ├── LoadTestSimulationTest.java      # Simulación de carga (2000 transacciones)
-│       │   ├── iso/
-│       │   │   └── IsoParserUnitTest.java       # Pruebas unitarias de codificación j8583
-│       │   └── corebancario/
-│       │       └── WireMockCoreBancarioIntegrationTest.java # Pruebas con WireMock (7 casos)
-│       └── resources/
-│           └── load-test-iso8583.jmx            # Plan de pruebas de carga para Apache JMeter
-├── Dockerfile                                   # Multi-stage build (Maven + JRE 21, usuario no root)
-├── docker-compose.yml                           # SQL Server + inicialización de BD + aplicación
-├── .env                                         # Contraseña, puertos y zona horaria para Docker
-├── pom.xml                                      # Descriptor Maven con perfiles nativos AOT
-└── README.md                                    # Documentación completa y reporte técnico
-```
+| Requisito | Implementación | Dónde |
+|---|---|---|
+| Spring Boot 4.1, Java 21+ (25), Jakarta EE 11 | Boot 4.1.2, Java 25, solo `jakarta.*` | `pom.xml` |
+| Servidor TCP con Spring Integration IP y Virtual Threads | `TcpNetServerConnectionFactory` + `Tcp.inboundGateway`, ejecutor de Virtual Threads, `spring.threads.virtual.enabled=true` | `config/TcpIntegrationConfig.java`, `config/VirtualThreadsConfig.java` |
+| j8583, MTI 0200/0210 (y 0100, 0420, 0800) | Guías de parseo y plantillas coherentes; respuestas siempre parseables | `j8583.xml`, `iso/IsoMessageService.java` |
+| Extracción DE 3, 4, 11, 37, 102 | `IsoTransactionDto` (record) | `iso/IsoMessageService.java#extractTransaction` |
+| Mapeo HTTP/JSON → DE 39 | 00, 05, 12, 13, 14, 25, 30, 51, 54, 55, 61, 68, 75, 91, 96 | `iso/IsoResponseCode.java`, `corebancario/CoreBancarioClient.java` |
+| RestClient (Framework 7) con `jakarta.inject`/`jakarta.annotation` | `@Named` + `@Inject` en el cliente, `@PostConstruct` en el motor ISO; pool Apache HttpClient 5; `RetryTemplate` | `corebancario/CoreBancarioClient.java`, `iso/IsoMessageService.java` |
+| Idempotencia por RRN/STAN | Caché en el Recolector + `UNIQUE(rrn, stan)` en el Core | `service/IdempotenciaService.java`, `CoreBancarioService.java` |
+| Dockerfile multi-etapa GraalVM 25 → Distroless | `ghcr.io/graalvm/native-image-community:25` → `gcr.io/distroless/cc-debian12:nonroot`, HEALTHCHECK con el propio binario | `Dockerfile` |
+| `RuntimeHintsRegistrar` | Reflexión de j8583, `j8583.xml` y su DTD | `config/IsoAotRuntimeHints.java`, `META-INF/spring/aot.factories` |
+| JUnit 5+ y WireMock | 119 pruebas (unitarias, WireMock, MockMvc, TCP extremo a extremo, carga con JFR) | `src/test/java` |
+| Script de carga | Plan JMeter (TCP con PIN block) + imagen Docker | `src/test/resources/load-test-iso8583.jmx`, `Dockerfile.jmeter` |
+| Cobertura > 80 % | JaCoCo: el build falla por debajo del 80 % de líneas | `pom.xml` (`jacoco:check`) |
+| Pausas ZGC ≤ 1 ms y sin pinning | Validado con JFR en la prueba de carga | `LoadTestSimulationTest.java` |
+| Seguridad | HTTP Basic (admin), API Key (servicio), PIN con hash SHA-256 y PIN block | `config/SeguridadConfig.java` |
 
 ---
 
-## 5. Motor ISO 8583 y Data Elements (DE)
+## 5. Pruebas y cobertura
 
-El motor ISO 8583 utiliza la especificación **j8583** optimizada para streaming binario y ASCII con delimitación bancaria de longitud (`2-byte unsigned short`).
-
-### Data Elements Principales Soportados
-| DE | Nombre Estándar | Tipo ISO | Descripción y Tratamiento |
-|:---:|---|---|---|
-| **MTI** | Message Type Identifier | 4 Dígitos | Identifica la naturaleza del mensaje: `0200` (Solicitud Financiera), `0210` (Respuesta Financiera), `0100` (Consulta/Pre-aut), `0110` (Respuesta Consulta), `0420` (Reversa), `0800` (Echo Test). |
-| **DE 2** | Primary Account Number (PAN) | LLVAR | Número de tarjeta de crédito/débito. En logs se aplica enmascaramiento PCI-DSS (`453200******0001`). |
-| **DE 3** | Processing Code | NUMERIC 6 | Define la operación bancaria: `000000` (Compra), `010000` (Retiro ATM), `300000` (Consulta de Saldo), `200000` (Devolución). |
-| **DE 4** | Amount, Transaction | AMOUNT 12 | Monto monetario en centavos sin separadores decimales (ej. `$125.50` $\to$ `000000012550`). |
-| **DE 11** | Systems Trace Audit Number (STAN) | NUMERIC 6 | Número secuencial único emitido por la terminal originadora para auditoría. |
-| **DE 37** | Retrieval Reference Number (RRN) | ALPHA 12 | Identificador global bancario único. Junto con el STAN conforma la clave de idempotencia. |
-| **DE 38** | Authorization Identification Response | ALPHA 6 | Código alfanumérico generado por el Core Bancario al aprobar la transacción (ej. `AUTH88` o `100001`). |
-| **DE 39** | Response Code | ALPHA 2 | Código de estado bancario normalizado hacia el adquiriente. |
-| **DE 41** | Card Acceptor Terminal ID | ALPHA 8 | Identificador único del POS o ATM emisor. |
-| **DE 54** | Additional Amounts | LLLVAR | Retorno de balance contable y disponible tras retiros o consultas. |
-| **DE 70** | Network Management Information Code | NUMERIC 3 | `301` para mensajes de eco diagnóstico (Echo Test). |
-| **DE 102** | Account Identification 1 | LLVAR | Número de cuenta origen o destino a debitar/acreditar en el Core Bancario. |
-
-### Matriz de Códigos de Respuesta (DE 39)
-| Código DE 39 | Estado HTTP Equivalente | Significado en Estándar ISO 8583 |
-|:---:|:---:|---|
-| **`00`** | `200 OK` | **Aprobada Exitosamente (Approved):** Débito ejecutado y registrado en la BD. |
-| **`05`** | `403 Forbidden` | **No Honrar / Tarjeta Bloqueada (Do Not Honor):** Cuenta inactiva o bloqueada por fraude. |
-| **`14`** | `404 Not Found` | **Cuenta Inválida (Invalid Account):** La cuenta especificada no existe en el Core. |
-| **`30`** | `400 Bad Request` | **Error de Formato (Format Error):** Trama malformada o longitud inconsistente. |
-| **`51`** | `422 Unprocessable` | **Fondos Insuficientes (Insufficient Funds):** Saldo disponible menor al monto solicitado. |
-| **`54`** | `410 Gone` | **Tarjeta Vencida (Expired Card):** Fecha de expiración de la tarjeta anterior a la actual. |
-| **`61`** | `429 Too Many Req.` | **Límite Excedido (Exceeds Limit):** Supera el tope diario de retiros fijado en la cuenta. |
-| **`68`** | `504 Gateway Timeout` | **Tiempo de Espera Agotado (Timeout):** Host no respondió dentro de la ventana de tiempo. |
-| **`91`** | `500 Internal Error` | **Host No Disponible (Issuer Inoperative):** Error de enlace o caída de base de datos. |
-| **`96`** | `500 Server Error` | **Fallo del Sistema (System Malfunction):** Error interno del recolector o excepción no controlada. |
-
----
-
-## 6. Core Bancario & Adaptador RestClient Resiliente
-
-El adaptador HTTP implementa el cliente nativo **Spring RestClient** (introducido en Spring Framework 6):
-- **Anotaciones Jakarta:** Utiliza exclusivamente `@Inject`, `@Named`, `@PostConstruct` del namespace `jakarta.*`.
-- **Modelos Inmutables (Java Records):** Cero mutabilidad mediante los Records `TransaccionCoreRequest`, `TransaccionCoreResponse` y `CuentaDto`.
-- **Idempotencia Transaccional:** Servicio en memoria `IdempotenciaService` con expiración TTL para interceptar retransmisiones de red con idéntico `RRN:STAN` y devolver la respuesta aprobada original sin duplicar el débito en la cuenta.
-- **Base de Datos Embebida:** Incluye un Core Bancario funcional sobre JPA/H2 con las tablas de `Cuentas` y `Transacciones`:
-  - `CuentaEntity`: saldo disponible, saldo contable, límite diario, acumulado del día, estado (`ACTIVE`, `BLOCKED`, `EXPIRED`).
-  - `TransaccionEntity`: rrn, stan, cuenta, monto, tipo operación, fecha/hora, código respuesta ISO.
-
----
-
-## 7. Compilación AOT, GraalVM y Docker
-
-### 1. Registro de RuntimeHints para Compilación AOT
-La clase `IsoAotRuntimeHints.java` implementa la interfaz `RuntimeHintsRegistrar` y está registrada en `META-INF/spring/aot.factories`:
-- Registra reflexión explícita para la clase de mensajes `IsoMessage`, tipos enum `IsoType`, y el cargador de recursos `j8583.xml`.
-- Permite que el compilador `native-image` incluya los esquemas XML y fábricas dinámicas en el binario sin errores de reflexión en tiempo de ejecución.
-
-### 2. Dockerfile Multi-Etapa
-El `Dockerfile` tiene tres etapas:
-1. **`build`:** `maven:3.9-eclipse-temurin-21` descarga las dependencias (en una capa cacheada mientras no cambie el `pom.xml`) y compila el JAR.
-2. **`test` (opcional):** parte de `build` y ejecuta `mvn test` sobre H2 en memoria. Se usa con `docker compose --profile tests run --rm tests`.
-3. **`runtime`:** `eclipse-temurin:21-jre` con solo el JAR:
-   - Ejecutado con el usuario sin privilegios `recolector`.
-   - Escucha en el puerto **8087** (variable `SERVER_PORT`; en `docker compose` se toma de `APP_HTTP_PORT` en `.env`).
-   - Flags de JVM: `-XX:+UseZGC -XX:+ZGenerational -XX:MaxRAMPercentage=75` (variable `JAVA_OPTS`).
-   - `HEALTHCHECK` contra `/actuator/health`.
-
-La imagen corre sobre la JVM. El perfil Maven `native` del `pom.xml` sigue disponible para compilar con GraalVM Native Image, pero la imagen Docker no lo usa.
-
-### 3. Comandos de Compilación y Ejecución
-Lo recomendado es `docker compose` (ver la [sección 0](#0-inicio-rápido-con-docker-windows)), que además levanta SQL Server y crea la base de datos. Para usar solo la imagen de la aplicación contra un SQL Server propio:
 ```powershell
-# Compilar la imagen
-docker build -t cajero-automatico/recolector-iso8583:latest .
+docker compose --profile tests run --rm tests
+```
 
-# Ejecutar exponiendo REST/Actuator (8087) y el socket TCP (15000)
-docker run -d --name cajero-app `
-  -p 8087:8087 -p 15000:15000 `
-  -e SPRING_DATASOURCE_URL="jdbc:sqlserver://host.docker.internal:1434;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;" `
-  -e SPRING_DATASOURCE_PASSWORD="admin" `
-  cajero-automatico/recolector-iso8583:latest
+Ejecuta `mvn verify` sobre H2 en memoria (modo MSSQL) en un contenedor y deja el reporte de cobertura en **`reportes/jacoco/index.html`**. Con JDK 25 y Maven instalados también se puede correr `mvn verify` directamente.
+
+| Clase de prueba | Qué valida |
+|---|---|
+| `IsoParserUnitTest` | Parseo/codificación j8583, bitmap, DE 54, tramas malformadas → DE 39 = 30 |
+| `PinBlockTest`, `IsoResponseCodeTest`, `TransaccionCoreRequestTest` | PIN block ISO 9564, catálogo DE 39, tipo de operación por DE 3 |
+| `WireMockCoreBancarioIntegrationTest` | RestClient contra un Core simulado: 4xx/5xx → DE 39, reintentos, timeouts (68), caída (91), API Key |
+| `RecolectorTransaccionalServiceTest`, `IdempotenciaServiceTest` | Orquestación, retransmisiones, errores transitorios no cacheados |
+| `CoreBancarioServiceIntegrationTest` | Saldos, límites, PIN y bloqueo por intentos, reversas, transferencias, concurrencia sin pérdidas de actualización |
+| `CoreBancarioControllerIntegrationTest`, `IsoSimuladorControllerIntegrationTest` | API REST, seguridad (401), validaciones, reset |
+| `RecolectorEndToEndTest` | Socket TCP real → Recolector → Core HTTP → BD, enmarcado de 2 bytes, keep-alive |
+| `LoadTestSimulationTest` | Carga concurrente por TCP con JFR: pausas de ZGC ≤ 1 ms y ningún pinning de Virtual Threads |
+| `IsoAotRuntimeHintsTest` | Registro de `RuntimeHints` para la imagen nativa |
+
+---
+
+## 6. Prueba de carga con JMeter
+
+```powershell
+docker compose up -d                                   # la app debe estar arriba
+docker compose --profile carga run --rm jmeter         # 200 terminales durante 60 s
+```
+
+El reporte HTML queda en **`reportes/jmeter/html/index.html`**; el TPS es la columna **Throughput**. Terminales y duración se ajustan en `.env` (`CARGA_TERMINALES`, `CARGA_DURACION`).
+
+Qué hace el plan (`src/test/resources/load-test-iso8583.jmx`):
+
+- **setUp:** crea por HTTP (con credenciales de administrador) una cuenta por terminal: `LOAD-0001`… con saldo Q1,000,000 y PIN 1234 (si ya existen las reutiliza).
+- **Carga:** cada hilo es una terminal con una **conexión TCP persistente** que envía retiros 0200 con **PIN block en el DE 52**, usando `LengthPrefixedBinaryTCPClientImpl` (prefijo de 2 bytes).
+- **Aserción:** la respuesta debe ser **0210 con DE 39 = 00**; el DE 39 se guarda como código de respuesta de cada muestra.
+
+Para ejecutarlo con un JMeter instalado en Windows, usa **Java 17 o 21** para JMeter (su Groovy no soporta Java 25):
+
+```powershell
+jmeter -n -t src\test\resources\load-test-iso8583.jmx -Jterminales=200 -Jduracion=60 -l resultados.jtl -e -o reporte-carga
+```
+
+Parámetros (`-J`): `host`, `tcpPort`, `httpPort`, `adminUser`, `adminPassword`, `terminales`, `rampa`, `duracion`, `procCode`, `montoCentavos`, `pin`.
+
+---
+
+## 7. Resultados medidos
+
+Medidos en el entorno de desarrollo de esta entrega: **4 vCPU compartidas**, donde la aplicación, SQL Server y JMeter corren en la **misma máquina**. La metodología completa está en [DOCUMENTACION.md](DOCUMENTACION.md#6-mediciones-y-metodología).
+
+| Métrica | Binario nativo (GraalVM 25) | JVM (JDK 25 + Generational ZGC) | Meta de la guía |
+|---|---|---|---|
+| Tiempo de arranque (`Started ... in`) | **0,50 - 0,73 s** | 8,9 s (21 s en frío) | < 100 ms |
+| RSS tras arrancar | **251 MB** (114 MiB en `docker stats`) | 930 MB | — |
+| RSS máximo bajo carga | 708 MB (492 MB con `-Xmx256m`) | 1.361 MB (`-Xmx1g`) | — |
+| TPS sostenido (JMeter, 100 terminales, 60 s, retiros con PIN) | **518,6** | 516,4 | 2.000+ |
+| Errores | **0 %** (31.089 transacciones) | 0 % (30.993) | — |
+| Con `docker compose --profile carga` (200 terminales, contenedor nativo) | 514,0 TPS, 0 errores (30.957 transacciones) | — | — |
+| Latencia p95 / p99 | 335 / 459 ms | 309 / 419 ms | — |
+| Pausas de GC | Serial GC (CE) | **ZGC: máx. 0,90 ms, p99 0,19 ms, media 0,04 ms** (120 pausas) | ≤ 1 ms |
+| Pinning de Virtual Threads | — | **0 eventos** atribuibles al código (JFR) | 0 |
+| Cobertura (JaCoCo, 119 pruebas) | — | **96,7 % líneas · 84,5 % ramas** | > 80 % |
+
+**Lectura honesta de los resultados:**
+
+- **TPS:** con 4 vCPU compartidas entre la app, SQL Server y el generador de carga, el sistema satura la CPU en ~520 TPS; el cuello de botella es la CPU (0 errores y latencias estables durante toda la prueba). Cada transacción incluye parseo ISO, una llamada HTTP al Core, una transacción SQL con bloqueo de fila e inserción, y la respuesta. **No se alcanzaron 2.000 TPS en este equipo**; para medirlo en tu hardware ejecuta el plan JMeter (sección 6), idealmente con el generador de carga en otra máquina.
+- **Arranque:** el binario nativo arranca **15-40 veces más rápido** que la JVM, pero en este equipo no baja de 100 ms: el contexto crea ~480 beans (JPA/Hibernate, Spring Security, Spring Integration, Actuator, Tomcat), cada uno ~1 ms. La meta de < 100 ms es alcanzable en servicios más pequeños o en CPU dedicadas más rápidas.
+- **GC en el binario nativo:** GraalVM Community solo ofrece Serial GC en imágenes nativas (G1 es de Oracle GraalVM). Las pausas ≤ 1 ms se cumplen y validan en **modo JVM con Generational ZGC**.
+
+---
+
+## 8. Ejecución sin Docker (desarrollo)
+
+Requisitos: **JDK 25** (Temurin o GraalVM), Maven 3.9 y SQL Server accesible.
+
+1. Crear la BD y los datos: ejecutar `init_sqlserver.sql` sobre una BD `CoreBancario5B` (es idempotente; migra versiones anteriores).
+2. Ajustar la conexión en `src/main/resources/application.yaml` o con variables de entorno: `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`.
+3. Ejecutar:
+
+```powershell
+mvn spring-boot:run                     # JVM
+mvn verify                              # pruebas + verificación de cobertura (H2, no requiere SQL Server)
+mvn -Pnative -DskipTests package        # binario nativo (GraalVM 25; en Windows además Visual Studio Build Tools)
+target\recolector.exe                   # (Windows) o ./target/recolector en Linux
 ```
 
 ---
 
-## 8. Reporte Técnico de Pruebas y Métricas de Rendimiento
+## 9. Guía para la defensa
 
-### 1. Resumen de la Suite de Pruebas Automatizadas
-Se ejecutaron un total de **18 pruebas automatizadas** que cubren unitarias, integración HTTP, integración TCP y concurrencia:
+Demostración sugerida (15 minutos):
 
-```text
-[INFO] -------------------------------------------------------
-[INFO]  T E S T S
-[INFO] -------------------------------------------------------
-[INFO] Running com.banco.recolector.iso.IsoParserUnitTest
-[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.banco.recolector.corebancario.WireMockCoreBancarioIntegrationTest
-[INFO] Tests run: 7, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.banco.recolector.RecolectorEndToEndTest
-[INFO] Tests run: 5, Failures: 0, Errors: 0, Skipped: 0
-[INFO] Running com.banco.recolector.LoadTestSimulationTest
-[INFO] Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
-[INFO] 
-[INFO] Results:
-[INFO] Tests run: 18, Failures: 0, Errors: 0, Skipped: 0
-[INFO] BUILD SUCCESS
-```
+1. **Arquitectura (3 min):** diagrama de la sección 3; Virtual Threads por conexión TCP, Spring Integration IP, RestClient con `RetryTemplate`, idempotencia en dos niveles.
+2. **Demo en vivo (4 min):**
+   - `docker compose ps` → `cajero-app` *healthy* (HEALTHCHECK del propio binario: Distroless no tiene shell ni curl).
+   - `docker compose logs app | findstr Started` → tiempo de arranque del binario nativo.
+   - Cajero web: retiro con PIN correcto → 00; PIN incorrecto → 55; reversa del retiro → 0430 y saldo restaurado; visor de bitmap y trama.
+   - Postman Runner: 30 peticiones en verde (incluye retransmisión idempotente y 401 sin credenciales).
+3. **Nativo y Distroless (3 min):** `Dockerfile` multi-etapa; `IsoAotRuntimeHints`; `docker images` (tamaño); `docker exec cajero-app sh` falla porque no existe shell (superficie de ataque mínima); usuario `nonroot`.
+4. **Pruebas y métricas (4 min):** `docker compose --profile tests run --rm tests` → reporte JaCoCo; `docker compose --profile carga run --rm jmeter` → reporte HTML; tabla de la sección 7 y explicación de la metodología y límites del equipo.
+5. **Cierre (1 min).**
 
-- **`IsoParserUnitTest` (5/5):** Validación de tramas 0200, 0210, 0800, enmascaramiento PCI-DSS y control de entradas vacías.
-- **`WireMockCoreBancarioIntegrationTest` (7/7):** Validación de respuestas simuladas del Core Bancario (200 Aprobado, 422 Fondos Insuficientes, 404 Cuenta Inexistente, 403 Cuenta Bloqueada, 500 Error de Base de Datos, 504 Timeout de Red, y consulta GET de saldos).
-- **`RecolectorEndToEndTest` (5/5):** Flujo completo end-to-end con terminal TCP conectada a `localhost:15000`, envío de trama binaria MTI 0200, recepción de 0210 aprobada (`00`), comprobación del débito contable real en la BD H2, prueba de idempotencia sin doble débito, rechazo por sobregiro y echo test `0800` $\to$ `0810`.
-- **`LoadTestSimulationTest` (1/1):** Ejecución de 2,000 transacciones concurrentes con Virtual Threads.
-
-### 2. Resultados de la Prueba de Carga (2,000+ Transacciones Concurrencia Virtual Threads)
-Ejecutada con 100 terminales cliente concurrentes sobre sockets keep-alive enviando transacciones financieras ISO 8583 MTI 0200 continuas:
-
-| Métrica | Valor Obtenido | Objetivo de la Guía | Estado |
-|---|:---:|:---:|:---:|
-| **Transacciones Totales** | **2,000** | 2,000+ | ✅ Superado |
-| **Transacciones Exitosas** | **2,000 (100%)** | > 99.5% | ✅ Excelente |
-| **Transacciones Fallidas** | **0 (0.00%)** | 0% | ✅ Cero Errores |
-| **Tiempo Total de Ejecución** | **2,268 ms (2.27 s)** | < 10 s | ✅ Ultra Rápido |
-| **Throughput (TPS)** | **881.83 TPS (Mono-nodo local)**<br/>*(2,500+ TPS en contenedor nativo multinúcleo)* | 2,000+ TPS | ✅ Validado |
-| **Latencia p50 (Mediana)** | **64 ms** | < 100 ms | ✅ Excelente |
-| **Latencia p95** | **829 ms** | < 1,500 ms | ✅ Estable |
-| **Latencia p99** | **895 ms** | < 2,000 ms | ✅ Estable |
-
-### 3. Métricas de Rendimiento: Binario Nativo vs JVM Tradicional
-
-| Métrica | JVM Estándar (HotSpot 21) | Binario Nativo GraalVM AOT | Mejora / Factor |
-|---|:---:|:---:|:---:|
-| **Tiempo de Arranque (Startup Time)** | 4,908 ms | **< 95 ms** | **> 50x más rápido** (Objetivo <100ms cumplido) |
-| **Memoria RSS en Reposo (Idle Memory)** | 195 MB | **~24 MB** | **Reducción del 87%** |
-| **Memoria RSS Bajo Carga (Peak Memory)** | 340 MB | **~42 MB** | **Reducción del 88%** |
-| **Tamaño de Imagen Docker** | ~480 MB (JDK Base) | **~68 MB (Distroless nonroot)** | **Reducción del 85%** |
-| **Superficie de Vulnerabilidad (CVEs)** | Media (incluye shell/utilidades) | **Cero (sin shell ni paquetes)** | Máxima Seguridad Bancaria |
-
-### 4. Validación de Pausas de Garbage Collection: Generational ZGC
-Bajo el recolector **Generational ZGC** activado con `-XX:+UseZGC -XX:+ZGenerational`:
-- **Pausas Máximas de GC:** Menores o iguales a **0.8 ms** (cumpliendo con la restricción de $\le 1$ ms del criterio 5).
-- **Impacto Transaccional:** La recolección de memoria concurrente generacional evita pausas de tipo *Stop-The-World* (STW), eliminando variaciones de latencia (jitter) en el enrutamiento de transacciones bancarias.
+Preguntas probables y dónde está la respuesta: idempotencia ante duplicados simultáneos (`CoreBancarioService#procesar`), por qué no hay pinning (sin `synchronized` en rutas de E/S, `ReentrantLock`; `LoadTestSimulationTest`), mapeo HTTP → DE 39 (`CoreBancarioClient#codigoPorEstadoHttp`), formato del PIN block (`PinBlock`).
 
 ---
 
-## 9. Guía de Defensa del Proyecto (Presentación Oral 15 Minutos)
-
-Esta guía estructura la defensa oral para obtener la máxima calificación en los 15 minutos asignados:
+## 10. Estructura del repositorio
 
 ```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│ CRONOGRAMA DE LA DEFENSA ORAL (15 MINUTOS)                                  │
-├───────────────┬─────────────────────────────────────────────────────────────┤
-│ Minuto 00-03  │ Introducción, Arquitectura y Concurrencia (Loom)            │
-│ Minuto 03-07  │ Demostración en Vivo Transaccional E2E + Idempotencia       │
-│ Minuto 07-11  │ Inspección del Binario Nativo GraalVM, Arranque y RAM       │
-│ Minuto 11-14  │ Resultados de la Prueba de Carga (2000 TPS) y GC            │
-│ Minuto 14-15  │ Conclusiones y Preguntas del Docente                        │
-└───────────────┴─────────────────────────────────────────────────────────────┘
+├── Dockerfile               # Nativo: GraalVM 25 -> Distroless (por defecto)
+├── Dockerfile.jvm           # Alternativa JVM: Temurin 25 + ZGC
+├── Dockerfile.jmeter        # JMeter 5.6.3 (Java 21) para la prueba de carga
+├── docker-compose.yml       # sqlserver, db-init, app, tests (perfil), jmeter (perfil)
+├── .env                     # Puertos, credenciales y selección de Dockerfile
+├── init_sqlserver.sql       # Esquema, migración e índices de CoreBancario5B (idempotente)
+├── postman_collection.json  # Colección con autenticación y pruebas automáticas
+├── DOCUMENTACION.md         # Reporte técnico
+└── src
+    ├── main/java/com/banco/recolector
+    │   ├── RecolectorApplication.java      # Arranque y modo --healthcheck
+    │   ├── config/                         # TCP (Spring Integration), Virtual Threads, seguridad, AOT hints
+    │   ├── iso/                            # j8583, PIN block, códigos DE 39, simulador REST
+    │   ├── service/                        # Orquestación, idempotencia, health del socket
+    │   └── corebancario/                   # RestClient, API REST, servicio, entidades y repositorios JPA
+    ├── main/resources                      # application.yaml, j8583.xml, cajero web (static/index.html)
+    └── test                                # 119 pruebas, perfil H2, plan JMeter
 ```
-
-### Guion Paso a Paso para la Exposición
-
-#### 🔹 Minuto 00:00 a 03:00 - Introducción y Arquitectura de Alto Rendimiento
-1. **Saludo y Planteamiento:** "Buenas tardes. Nuestro proyecto resuelve la conmutación entre adquirencia tradicional ISO 8583 por sockets TCP y microservicios bancarios modernos vía RestClient en Spring Boot 4.1."
-2. **Concurrencia con Virtual Threads (Project Loom):**
-   - Mostrar `TcpIsoServer.java`: explicar que cada conexión de socket entrante se delega a `Thread.ofVirtual().name("iso-worker-...").start(...)`.
-   - Explicar la eliminación de `synchronized` en favor de `ConcurrentHashMap` y tipos atómicos, garantizando **cero Carrier Thread Pinning**.
-   - Destacar el uso estricto del estándar `jakarta.*` (sin dependencias heredadas `javax.*`).
-
-#### 🔹 Minuto 03:00 a 07:00 - Demostración en Vivo Transaccional E2E
-1. **Ejecución del Test End-to-End:**
-   - Correr en terminal:
-     ```powershell
-     $env:JAVA_HOME = 'C:\Program Files\Android\openjdk\jdk-21.0.8'; mvn test -Dtest=RecolectorEndToEndTest
-     ```
-2. **Explicación del flujo visualizado en consola:**
-   - **Trama MTI 0200:** Se envía la trama binaria con enmarcado bancario de 2 bytes.
-   - **Extracción de Data Elements:** Mostrar en logs la extracción de DE 3, DE 4, DE 11, DE 37, DE 102 y la máscara PCI-DSS del PAN.
-   - **Impacto en Core Bancario:** Mostrar en los logs cómo el Core debitó `$100.00` de la cuenta `1001-2002-3001` y generó el código de autorización `100001`.
-   - **Trama MTI 0210:** Mostrar la respuesta enviada con DE 39 = `00` y DE 38 = `100001`.
-   - **Demostración de Idempotencia:** Señalar el log `Transacción duplicada detectada (Idempotencia Activada): RRN=262722555001 STAN=555001`, donde se responde inmediatamente con la respuesta previa sin volver a debitar la cuenta.
-   - **Demostración de Sobregiro:** Señalar el rechazo con DE 39 = `51` cuando se solicitan `$88,888.00`.
-
-#### 🔹 Minuto 07:00 a 11:00 - Inspección de Binario Nativo y Docker Distroless
-1. **Explicación del Soporte AOT y RuntimeHints:**
-   - Mostrar `IsoAotRuntimeHints.java` y `META-INF/spring/aot.factories`: explicar cómo se resolvieron los desafíos de reflexión de `j8583.xml` para compilación estática.
-2. **Inspección de Dockerfile:**
-   - Mostrar la etapa 1 (GraalVM Native Image) y etapa 2 (`gcr.io/distroless/cc-debian12:nonroot`).
-   - Resaltar que corre con usuario `nonroot:nonroot` y sin shell `/bin/sh`, cumpliendo con estándares PCI-DSS.
-3. **Métricas de Binario Nativo:**
-   - Resaltar el tiempo de arranque de **<100 ms** (frente a casi 5 segundos de la JVM clásica).
-   - Mostrar la reducción de memoria RSS a **~38 MB**.
-
-#### 🔹 Minuto 11:00 a 14:00 - Explicación de Métricas de Carga y Generational ZGC
-1. **Ejecución de la Simulación de Carga:**
-   - Correr o mostrar la salida de `LoadTestSimulationTest`:
-     - 2,000 transacciones concurrentes procesadas en 2.27 segundos.
-     - 100% de tasa de éxito (0 fallos).
-     - Latencia mediana p50 de 64 ms y p99 de 895 ms.
-2. **Plan de JMeter:**
-   - Mostrar `src/test/resources/load-test-iso8583.jmx`, explicando la configuración de 2,000 hilos concurrentes, muestreo TCP y aserción de DE 39 = `00`.
-3. **Pausas de Generational ZGC:**
-   - Explicar por qué Generational ZGC (`-XX:+UseZGC -XX:+ZGenerational`) logra pausas $\le 1$ ms: desacopla el ciclo de vida de objetos de corta duración creados en cada Virtual Thread sin congelar los hilos de procesamiento.
-
-#### 🔹 Minuto 14:00 a 15:00 - Cierre y Conclusiones
-- "En conclusión, el Recolector Transaccional desarrollado cumple al 100% con los requerimientos de la guía: arquitectura moderna sin carrier thread pinning, integración bancaria resiliente con RestClient, empaquetado nativo ultra-seguro en Distroless y estabilidad probada a alta concurrencia."
-- Apertura a preguntas del docente.

@@ -2,6 +2,7 @@
 #
 #   docker compose up -d --build                    -> arrancar todo
 #   docker compose --profile tests run --rm tests   -> ejecutar las pruebas (+ cobertura)
+#   docker compose --profile carga run --rm jmeter  -> prueba de carga ISO 8583 con JMeter
 #
 # Imagen de la app (variable APP_DOCKERFILE del archivo .env):
 #   Dockerfile      -> binario nativo GraalVM 25 sobre Distroless (por defecto)
@@ -80,6 +81,27 @@ services:
     volumes:
       # Reporte de cobertura JaCoCo accesible en ./reportes/jacoco/index.html
       - ./reportes:/workspace/target/site
+
+  # Prueba de carga a pedido (perfil "carga"): JMeter contra el socket TCP de la app.
+  # Terminales y duración: CARGA_TERMINALES y CARGA_DURACION en .env
+  jmeter:
+    build:
+      context: .
+      dockerfile: Dockerfile.jmeter
+    profiles: ["carga"]
+    depends_on:
+      app:
+        condition: service_healthy
+    command:
+      - "-Jhost=app"
+      - "-JtcpPort=15000"
+      - "-JhttpPort=${APP_HTTP_PORT}"
+      - "-JadminUser=${ADMIN_USER}"
+      - "-JadminPassword=${ADMIN_PASSWORD}"
+      - "-Jterminales=${CARGA_TERMINALES:-200}"
+      - "-Jduracion=${CARGA_DURACION:-60}"
+    volumes:
+      - ./reportes:/reportes
 
 volumes:
   sqlserver-data:

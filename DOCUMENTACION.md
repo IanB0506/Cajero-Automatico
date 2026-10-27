@@ -1,394 +1,261 @@
-# Documentación Técnica: Pasarela de Transacciones POS y ATM con ISO 8583 en Java (jPOS)
+# Reporte técnico: Recolector Transaccional ISO 8583
+
+Documento de diseño y resultados del proyecto. Para instalar y ejecutar, ver el [README](README.md).
+
+## Contenido
+
+1. [Alcance](#1-alcance)
+2. [Arquitectura y decisiones de diseño](#2-arquitectura-y-decisiones-de-diseño)
+3. [Formato de las tramas](#3-formato-de-las-tramas)
+4. [Core Bancario](#4-core-bancario)
+5. [Seguridad](#5-seguridad)
+6. [Mediciones y metodología](#6-mediciones-y-metodología)
+7. [Estrategia de pruebas](#7-estrategia-de-pruebas)
+8. [Limitaciones y trabajo futuro](#8-limitaciones-y-trabajo-futuro)
 
 ---
 
-## 1. Introducción y Contexto de la Industria Financiera
+## 1. Alcance
 
-En el ecosistema global de pagos con tarjeta de débito y crédito, millones de transacciones se realizan cada segundo entre dispositivos terminales (Datáfonos POS, Cajeros Automáticos ATM, plataformas de comercio electrónico) y los centros de procesamiento de los bancos emisores y adquirentes.
+El sistema cumple el rol de **switch / recolector transaccional** entre terminales (cajeros y POS) que hablan **ISO 8583:1987** sobre TCP y un **Core Bancario** que expone una API REST/JSON sobre SQL Server. Ambos componentes viven en la misma aplicación Spring Boot, pero se comunican **solo por HTTP** (el Recolector llama al Core con `RestClient` como si fuera un servicio remoto), de modo que podrían desplegarse por separado sin cambiar código.
 
-Para garantizar la interoperabilidad universal entre diferentes fabricantes de hardware (Ingenico, Verifone, Diebold Nixdorf, NCR) y redes de autorización financiera (Visa, Mastercard, American Express, switches locales como PROSA, Red Enlace, Transbank, Banred), la Organización Internacional de Normalización estableció el estándar **ISO 8583** (*Financial transaction card originated messages — Interchange message specifications*).
+Transacciones soportadas:
 
-El estándar define:
-1. La estructura de tramas de datos intercambiadas por la red.
-2. Los formatos de los identificadores de tipo de mensaje (**MTI**).
-3. Los mapas de bits (**Bitmaps**) que indican qué campos están presentes en cada mensaje.
-4. El significado y formato de cada elemento de datos (**Data Elements** o Campos del 1 al 128).
-
----
-
-## 2. El Framework jPOS: El Estándar Industrial en Java
-
-**[jPOS](http://jpos.org/)** es el motor de conmutación financiera de código abierto más utilizado, maduro y probado en batalla de la industria de pagos electrónicos en Java. Creado a finales de los años 90 por Alejandro Revilla, jPOS se encarga de resolver los problemas más críticos y de bajo nivel en sistemas de misión crítica:
-
-- **Serialización y Deserialización de Alto Rendimiento**: Convierte tramas binarias o ASCII que viajan por sockets TCP/IP en objetos Java fuertemente tipados (`ISOMsg`) y viceversa en microsegundos.
-- **Abstracción de Empaquetadores (`ISOPackager`)**: Soporta múltiples dialectos y versiones de ISO 8583 (1987, 1993, 2003, AS 2805, variantes propietarias de Visa/Mastercard) mediante clases Java o esquemas XML configurables (`GenericPackager`).
-- **Control de Canales de Transporte (`ISOChannel`)**: Gestiona la delimitación de tramas por sockets TCP. Como TCP es un protocolo de flujo continuo orientado a bytes sin noción de mensajes individuales, `ISOChannel` resuelve el encuadre (framing) prefijando la longitud exacta de la trama (en 2 o 4 bytes ASCII, binarios o BCD).
-- **Servidores Concurrentes Multihilo (`ISOServer`)**: Acepta miles de conexiones simultáneas provenientes de terminales distribuidos y delega el procesamiento a oyentes transaccionales (`ISORequestListener`) desacoplados.
+| MTI solicitud → respuesta | Uso | DE 3 (código de procesamiento) |
+|---|---|---|
+| 0200 → 0210 | Financiera: compra, retiro, devolución, transferencia | `00xxxx` compra, `01xxxx` retiro, `20xxxx` devolución, `40xxxx` transferencia (cuenta destino en DE 103) |
+| 0100 → 0110 | Autorización / consulta de saldo | `30xxxx` |
+| 0420 → 0430 | Reversa de una transacción aprobada (DE 37 = RRN original) | el de la transacción original |
+| 0800 → 0810 | Gestión de red / echo test (DE 70 = 301) | — |
 
 ---
 
-## 3. Anatomía del Mensaje ISO 8583
-
-Un mensaje ISO 8583 se divide estructuralmente en tres componentes fundamentales:
-
-```text
-+-----------------------+-----------------------+---------------------------------------+
-|  MTI (4 Caracteres)   | Bitmap (16/32 Chars)  | Elementos de Datos (Campos F2 a F128) |
-+-----------------------+-----------------------+---------------------------------------+
-```
-
-### 3.1. Identificador de Tipo de Mensaje (MTI - Message Type Identifier)
-Es un código numérico de 4 dígitos que describe el propósito y la naturaleza de la transacción:
-
-```text
-Posición 1: Versión ISO 8583
- ├── 0xxx -> ISO 8583:1987
- ├── 1xxx -> ISO 8583:1993
- └── 2xxx -> ISO 8583:2003
-
-Posición 2: Clase del Mensaje
- ├── x1xx -> Autorización (Authorization)
- ├── x2xx -> Transacción Financiera (Financial Transaction)
- ├── x4xx -> Reversa / Anulación (Reversal)
- └── x8xx -> Gestión de Red (Network Management)
-
-Posición 3: Función del Mensaje
- ├── xx0x -> Solicitud (Request)
- ├── xx1x -> Respuesta (Response)
- ├── xx2x -> Notificación (Advice)
- └── xx3x -> Respuesta a Notificación (Advice Response)
-
-Posición 4: Origen de la Transacción
- ├── xxx0 -> Terminal Adquirente (Acquirer)
- ├── xxx1 -> Adquirente Repetido (Acquirer Repeat)
- └── xxx2 -> Emisor (Issuer)
-```
-
-#### Ejemplos Prácticos de MTI implementados en la Pasarela:
-| MTI | Descripción | Uso en el Sistema |
-| :--- | :--- | :--- |
-| `0800` | Network Management Request | Petición de Echo Test / Verificación de conexión de POS o ATM. |
-| `0810` | Network Management Response | Respuesta de la Pasarela confirmando estado en línea. |
-| `0200` | Financial Transaction Request | Compra en POS o Retiro de Efectivo en Cajero ATM. |
-| `0210` | Financial Transaction Response | Respuesta del Banco con aprobación o rechazo de fondos. |
-| `0100` | Authorization Request | Pre-autorización en POS o Consulta de Saldo en ATM. |
-| `0110` | Authorization Response | Respuesta con código de autorización o saldo de cuenta. |
-| `0400` / `0420` | Reversal Request | Reversa por timeout o por fallo físico en dispensador de billetes de ATM. |
-| `0410` / `0430` | Reversal Response | Confirmación de anulación y reintegro del dinero al cliente. |
-
----
-
-### 3.2. El Mapa de Bits (Bitmap)
-El Bitmap indica qué campos están presentes en la trama.
-- **Bitmap Primario**: Representa los campos del 1 al 64 en 64 bits (16 caracteres hexadecimales). Si el bit 1 es `1`, indica que existe un Bitmap Secundario.
-- **Bitmap Secundario**: Representa los campos del 65 al 128 (otros 16 caracteres hexadecimales).
-
-Por ejemplo, un Bitmap hexadecimal `80200000000000000400000000000000` indica la presencia de los campos F1, F3, F70, etc. El framework jPOS calcula y deserializa automáticamente los bitmaps sin intervención manual del desarrollador.
-
----
-
-## 4. Arquitectura de la Pasarela (POS & ATM Gateway)
-
-La solución está construida sobre una arquitectura modular desacoplada:
-
-```mermaid
-flowchart TD
-    subgraph Clientes ["Terminales de Clientes"]
-        POS["Terminal POS / Datáfono\n(Ingenico, Verifone)"]
-        ATM["Cajero Automático / ATM\n(Diebold Nixdorf, NCR)"]
-    end
-
-    subgraph Transporte ["Capa de Comunicación TCP/IP"]
-        PortPOS["Puerto TCP 15000\nASCIIChannel (2-byte header)"]
-        PortATM["Puerto TCP 15001\nASCIIChannel (2-byte header)"]
-    end
-
-    subgraph Servidores ["Servidores jPOS (ISOServer)"]
-        ServerPOS["ISOServer (POS)\nThreadPool"]
-        ServerATM["ISOServer (ATM)\nThreadPool"]
-    end
-
-    subgraph Listeners ["Oyentes Transaccionales (ISORequestListener)"]
-        PosListener["PosRequestListener\n(0200, 0100, 0420, 0800)"]
-        AtmListener["AtmRequestListener\n(0200, 0100, 0420, 0800, F54, F52)"]
-    end
-
-    subgraph Core ["Motor Core Bancario / Switch"]
-        BankCore["BankCoreService\n- Control de Cuentas y Saldos\n- Validación de PIN Block\n- Límite diario de retiros ATM\n- Conciliación de Reversas"]
-        Accounts[("Cuentas y Tarjetas\n(In-Memory Thread-Safe)")]
-        AuditLog[("Bitácora de Auditoría\n(STAN, RRN, Transacciones)")]
-    end
-
-    POS -->|Trama ISO 8583| PortPOS
-    ATM -->|Trama ISO 8583| PortATM
-
-    PortPOS --> ServerPOS
-    PortATM --> ServerATM
-
-    ServerPOS --> PosListener
-    ServerATM --> AtmListener
-
-    PosListener --> BankCore
-    AtmListener --> BankCore
-
-    BankCore --> Accounts
-    BankCore --> AuditLog
-```
-
-### Componentes Principales:
-1. **`IsoGatewayApplication`**: Punto de entrada principal con `@SpringBootApplication` que arranca el contexto Spring Boot 3, el servidor Tomcat en el puerto `8080` y el reporte de inicio.
-2. **`IsoGatewayServerService`**: Servicio Spring (`@Service`) que implementa la interfaz `SmartLifecycle` de Spring, garantizando un arranque y apagado limpio y determinista de los sockets TCP de jPOS (`ISOServer`) en los puertos `15000` (POS) y `15001` (ATM).
-3. **`PosRequestListener`**: Componente Spring (`@Component`) que implementa `ISORequestListener` de jPOS para procesar tramas originadas por terminales de venta (POS).
-4. **`AtmRequestListener`**: Componente Spring (`@Component`) que procesa transacciones de cajeros automáticos, extrayendo el PIN block del Campo 52 y generando la respuesta con los saldos desglosados en el Campo 54.
-5. **`BankCoreService`**: Servicio Spring (`@Service`) que simula el sistema central bancario (Core Banking). Valida fondos, tarjetas vencidas o bloqueadas, límites diarios de retiro en cajeros y gestiona la auditoría para la conciliación de reversas.
-6. **Capa Controladores REST (`@RestController`)**:
-   - `GatewayStatusController`: Métricas en vivo del Switch (`/api/status`) y pruebas de conectividad de red con Echo 0800 (`/api/echo`).
-   - `AccountController`: Consulta de cuentas (`/api/accounts`), restauración de saldos (`/api/accounts/reset`) y actualización en vivo del estado de tarjetas (`/api/accounts/status`).
-   - `TransactionController`: Auditoría transaccional (`/api/transactions`).
-   - `PosTransactionController`: Transacciones de compra y pre-autorización POS (`/api/pos/transact`) mediante sockets TCP directos.
-   - `AtmTransactionController`: Retiros y consultas de saldo ATM (`/api/atm/transact`) con armado de PIN Block binario y balance F54.
-7. **`IsoMsgHelper`**: Provee enmascaramiento de tarjetas bajo norma PCI-DSS (`453200******0001`), generación secuencial de STAN y RRN, empaquetado de PIN Block y visualización formateada de tramas.
-8. **`TerminalPrinter`**: Formatea e imprime los tickets de compra y comprobantes de cajero en consola.
-9. **Dashboard Web SPA (HTML5/TailwindCSS)**: Interfaz gráfica moderna servida nativamente desde `src/main/resources/static/index.html` con kioscos interactivos animados de POS y ATM.
-
----
-
-## 5. Flujos Transaccionales y Diagramas de Secuencia
-
-### 5.1. Flujo de Compra en Terminal POS (Purchase 0200 -> 0210)
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Cliente as Tarjetahabiente
-    participant POS as Terminal POS
-    participant GW as Pasarela (PosRequestListener)
-    participant Core as Core Bancario
-
-    Cliente->>POS: Inserta Tarjeta Chip EMV y digita monto ($150.00)
-    POS->>GW: 0200 Financial Request (PAN, F3=000000, F4=150.00, F11, F14, F41, F42)
-    GW->>Core: authorizePosPurchase(pan, expDate, amount, stan, rrn)
-    Core->>Core: Valida existencia, vigencia y débito de saldo disponible
-    Core-->>GW: Aprobado (AuthCode: 100001, ResponseCode: 00)
-    GW->>POS: 0210 Financial Response (F38=100001, F39=00)
-    POS-->>Cliente: Imprime Ticket de Venta Aprobada
-```
-
----
-
-### 5.2. Flujo de Retiro de Efectivo en Cajero ATM (0200 -> 0210 con Campo 54)
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Cliente as Usuario ATM
-    participant ATM as Cajero Automático
-    participant GW as Pasarela (AtmRequestListener)
-    participant Core as Core Bancario
-
-    Cliente->>ATM: Inserta Tarjeta, digita PIN (1234) y solicita $100.00
-    ATM->>GW: 0200 Financial Request (PAN, F3=010000, F4=100.00, F52=PINBlock, F25=08)
-    GW->>Core: authorizeAtmWithdrawal(pan, pin, amount, stan, rrn)
-    Core->>Core: Valida PIN Block + Saldo + Límite diario de retiro ($500 max)
-    Core-->>GW: Aprobado (AuthCode: 100002, RC=00, Saldo Contable y Disponible)
-    GW->>GW: Construye Campo 54 (Saldos formateados ISO 8583)
-    GW->>ATM: 0210 Financial Response (F38, F39=00, F54 con saldos actualizados)
-    ATM->>ATM: Cuenta y dispensa $100.00 en billetes
-    ATM-->>Cliente: Entrega dinero e imprime recibo con saldo disponible
-```
-
----
-
-### 5.3. Flujo de Reversa por Falla de Dispensador Mecánico de ATM (0420 -> 0430)
-En los cajeros automáticos reales, existe la posibilidad de que tras ser aprobado el débito en el banco, el mecanismo de transporte de billetes sufra un atasco o el cliente tarde más de 30 segundos en retirar el efectivo de la ranura (shutter timeout). En este escenario crítico, **el cliente no recibió su dinero**, por lo que el cajero debe emitir una **Reversa Automática (0420)**:
+## 2. Arquitectura y decisiones de diseño
 
 ```mermaid
 sequenceDiagram
-    autonumber
-    participant ATM as Cajero ATM
-    participant GW as Pasarela (AtmRequestListener)
-    participant Core as Core Bancario
-
-    Note over ATM,Core: Transacción 0200 previa aprobada ($200.00 debitados)
-    ATM->>ATM: ⚠️ Fallo de hardware: Atasco en cajetín dispensador
-    Note over ATM: Dinero NO entregado al usuario
-    ATM->>GW: 0420 Reversal Request (F90=OriginalData con STAN previo, F4=200.00)
-    GW->>Core: processReversal(origStan, origRrn, pan, amount)
-    Core->>Core: Localiza transacción previa, cancela débito y reintegra $200.00 al saldo
-    Core-->>GW: Reversa aprobada
-    GW->>ATM: 0430 Reversal Response (F39=00)
-    Note over ATM: Dinero reintegrado. Auditoría conciliada sin pérdidas para el cliente.
+    participant T as Terminal
+    participant GW as Spring Integration IP<br/>(Virtual Thread)
+    participant R as RecolectorTransaccionalService
+    participant I as IdempotenciaService
+    participant C as CoreBancarioClient<br/>(RestClient)
+    participant K as Core Bancario (REST)
+    participant DB as SQL Server
+    T->>GW: [len 2 bytes][0200 ...]
+    GW->>R: byte[] trama
+    R->>R: j8583 parse + extracción DE 3/4/11/37/102/52
+    R->>I: ¿RRN+STAN ya respondido?
+    I-->>R: no
+    R->>C: TransaccionCoreRequest (record)
+    C->>K: POST /api/core/transacciones (X-API-Key)
+    K->>DB: SELECT ... WITH (UPDLOCK) / UPDATE / INSERT (UNIQUE rrn,stan)
+    DB-->>K: commit
+    K-->>C: 200 / 4xx + JSON con codigoRespuesta
+    C-->>R: TransaccionCoreResponse
+    R->>I: guardar respuesta definitiva
+    R-->>GW: 0210 con DE 38, DE 39, DE 54
+    GW-->>T: [len 2 bytes][0210 ...]
 ```
 
+### 2.1 Servidor TCP: Spring Integration IP + Virtual Threads
+
+- `TcpNetServerConnectionFactory` con `ByteArrayLengthHeaderSerializer(HEADER_SIZE_UNSIGNED_SHORT)`: el enmarcado bancario habitual (2 bytes con la longitud). Un tamaño máximo de trama (`recolector.tcp.max-frame-bytes`) evita que una longitud maliciosa reserve memoria arbitraria.
+- `Tcp.inboundGateway`: la respuesta sale por la misma conexión, que puede quedar abierta (las terminales reales mantienen la sesión).
+- El ejecutor de la fábrica es un `SimpleAsyncTaskExecutor` con **Virtual Threads**: cada conexión se atiende en su propio hilo virtual y todo el código es **bloqueante y secuencial** (lectura del socket, llamada HTTP, JDBC). Con miles de terminales no se agotan hilos de plataforma y no hace falta programación reactiva.
+- `spring.threads.virtual.enabled=true` aplica lo mismo a Tomcat y a las tareas programadas.
+- Sin `synchronized` en rutas con E/S (se usa `ReentrantLock` donde hace falta exclusión) para no fijar (*pin*) el hilo virtual a su carrier. La prueba `LoadTestSimulationTest` lo verifica con el evento JFR `jdk.VirtualThreadPinned`.
+- `TcpIsoHealthIndicator` publica en `/actuator/health` si el socket está escuchando y cuántas conexiones hay abiertas.
+
+### 2.2 Motor ISO 8583 (j8583)
+
+- `j8583.xml` define una guía de parseo por MTI. Cada respuesta declara todos los campos que puede devolver, y `IsoMessageService.createResponse` elimina de la respuesta cualquier campo que no esté en su guía y el PIN block (DE 52): la terminal siempre puede parsear la respuesta y el PIN nunca regresa.
+- `GuiasMessageFactory` expone las guías de parseo para saber qué campos admite cada respuesta.
+- Una trama ilegible (bitmap inválido, longitud incoherente, MTI desconocido) no cierra la conexión: se responde una trama válida con **DE 39 = 30**; un error inesperado responde **96**.
+
+### 2.3 Adaptador hacia el Core: RestClient + RetryTemplate
+
+- `CoreBancarioClient` usa `RestClient` (Spring Framework 7) sobre un pool de conexiones **Apache HttpClient 5** (keep-alive, 500 conexiones), adecuado para E/S bloqueante en Virtual Threads.
+- Inyección con `jakarta.inject` (`@Named`, `@Inject`); DTO inmutables con `record` y validación `jakarta.validation`.
+- Reintentos con el `RetryTemplate` **del núcleo de Spring Framework 7** (`org.springframework.core.retry`), solo ante caída de conexión o HTTP 5xx, con espera exponencial. Reintentar es seguro porque el Core es idempotente por (RRN, STAN).
+- Traducción de fallos a DE 39: timeout → **68**, sin conexión / 5xx → **91**, respuesta ilegible → **96**; si el Core responde 4xx con cuerpo, se usa su `codigoRespuesta` exacto; sin cuerpo, se traduce el estado HTTP (`codigoPorEstadoHttp`).
+
+### 2.4 Idempotencia en dos niveles
+
+1. **Recolector (`IdempotenciaService`):** caché en memoria por `RRN:STAN` con expiración (60 s) y tamaño máximo (50.000). Una retransmisión de la terminal recibe exactamente la misma trama sin llamar al Core. Los errores transitorios (68, 91, 96) **no** se guardan para que la retransmisión vuelva a intentarse.
+2. **Core (`CoreBancarioService`):** restricción `UNIQUE(rrn, stan)` en `transacciones`. Si llegan dos solicitudes iguales a la vez, la segunda falla al insertar, su transacción de BD se revierte completa (incluido el débito) y se devuelve la respuesta de la primera. Así la garantía no depende de la caché ni de que haya una sola instancia del Recolector.
+
+### 2.5 Imagen nativa y Distroless
+
+- Compilación AOT de Spring + GraalVM Native Image 25 (perfil Maven `native`), con `--static-nolibc` (todo estático salvo glibc) para correr sobre `distroless/cc-debian12`, `-march=compatibility` para que el binario funcione en cualquier x86-64 y `-H:+AddAllCharsets` (el driver de SQL Server necesita `Cp1252`).
+- `IsoAotRuntimeHints` (`RuntimeHintsRegistrar`, registrado en `META-INF/spring/aot.factories`) declara la reflexión que j8583 hace sobre sus tipos y los recursos `j8583.xml` y su DTD.
+- Distroless no tiene shell ni `curl`: el `HEALTHCHECK` ejecuta `/app/recolector --healthcheck`, un modo del propio binario que consulta `/actuator/health` y termina con 0 o 1 sin levantar Spring.
+- Para un arranque rápido, Hibernate no consulta metadatos JDBC al iniciar (`hibernate.boot.allow_jdbc_metadata_access=false`, dialecto y versión de BD declarados) y Hikari no abre conexiones hasta la primera consulta (`initialization-fail-timeout: -1`); la contraseña del administrador se hashea con BCrypt en el primer login, no al arrancar.
+
 ---
 
-## 6. Catálogo de Campos ISO 8583 Implementados
+## 3. Formato de las tramas
 
-A continuación se detalla la especificación técnica de los campos utilizados en la pasarela:
+### 3.1 Enmarcado
 
-| Campo (Fld) | Nombre Técnico | Tipo / Formato jPOS | Longitud | Presencia POS | Presencia ATM | Descripción de Negocio |
-| :---: | :--- | :--- | :---: | :---: | :---: | :--- |
-| **MTI** | Message Type Identifier | `IFA_NUMERIC` | 4 | Sí | Sí | Identificador de tipo de mensaje (`0100`, `0200`, `0420`, `0800`). |
-| **F1** | Bitmap Primario | `IFA_BITMAP` | 16 | Sí | Sí | Mapa de bits en hexadecimal indicando campos activos. |
-| **F2** | Primary Account Number (PAN) | `IFA_LLNUM` | LL..19 | Sí | Sí | Número de tarjeta de 16 a 19 dígitos. |
-| **F3** | Processing Code | `IFA_NUMERIC` | 6 | Sí | Sí | Código de procesamiento: `000000` (Compra), `010000` (Retiro), `300000` (Saldo). |
-| **F4** | Transaction Amount | `IFA_NUMERIC` | 12 | Sí | Sí | Monto en centavos (ej. $150.00 = `000000015000`). |
-| **F7** | Transmission Date & Time | `IFA_NUMERIC` | 10 | Sí | Sí | Fecha/Hora GMT de transmisión (`MMDDhhmmss`). |
-| **F11** | Systems Trace Audit Number (STAN) | `IFA_NUMERIC` | 6 | Sí | Sí | Número secuencial de auditoría único por terminal. |
-| **F12** | Local Transaction Time | `IFA_NUMERIC` | 6 | Sí | Sí | Hora local de la transacción (`hhmmss`). |
-| **F13** | Local Transaction Date | `IFA_NUMERIC` | 4 | Sí | Sí | Fecha local de la transacción (`MMDD`). |
-| **F14** | Card Expiration Date | `IFA_NUMERIC` | 4 | Sí | No | Fecha de caducidad de la tarjeta (`YYMM`, ej. `2812`). |
-| **F22** | Point of Service Entry Mode | `IFA_NUMERIC` | 3 | Sí | Sí | Modo de lectura: `021` (Chip EMV), `012` (Banda), `051` (Contactless). |
-| **F25** | Point of Service Condition Code | `IFA_NUMERIC` | 2 | Sí | Sí | `00` (Normal en POS), `08` (Cajero Automático / ATM). |
-| **F37** | Retrieval Reference Number (RRN) | `IF_CHAR` | 12 | Sí | Sí | Clave única de rastreo para conciliación bancaria. |
-| **F38** | Authorization Identification Resp | `IF_CHAR` | 6 | Sí | Sí | Código de aprobación de 6 dígitos generado por el emisor. |
-| **F39** | Response Code | `IF_CHAR` | 2 | Sí | Sí | Código de respuesta (`00` Aprobado, `51` Fondos insuficientes, etc.). |
-| **F41** | Card Acceptor Terminal ID (TID) | `IF_CHAR` | 8 | Sí | Sí | Identificador único de la terminal (`POS00001`, `ATM00001`). |
-| **F42** | Card Acceptor Identification (MID) | `IF_CHAR` | 15 | Sí | Sí | Código del comercio o institución adquirente. |
-| **F49** | Transaction Currency Code | `IF_CHAR` | 3 | Sí | Sí | Código ISO 4217 de moneda (`840` USD, `484` MXN). |
-| **F52** | PIN Data (PIN Block) | `IFA_BINARY` | 8 bytes | Opcional | **Obligatorio** | Bloque criptográfico del PIN (64 bits / 16 caracteres hexadecimales). |
-| **F54** | Additional Amounts (Saldos) | `IFA_LLLCHAR` | LLL..120 | No | **Obligatorio** | Saldos contable y disponible devueltos por el ATM. |
-| **F70** | Network Management Code | `IFA_NUMERIC` | 3 | Sí | Sí | Código de gestión de red: `301` (Echo Test). |
-| **F90** | Original Data Elements | `IF_CHAR` | 42 | Sí | Sí | Datos de la transacción original usados en Reversas (`0420`). |
-
----
-
-### 6.1. Estructura Oficial del Campo 54 (Additional Amounts / Saldos)
-El Campo 54 transmite los saldos de la cuenta bancaria hacia el cajero ATM. Cada saldo se compone de un segmento de 20 caracteres:
-
-```text
-[Tipo Cuenta (2)] [Tipo Saldo (2)] [Moneda (3)] [Signo (1)] [Monto en centavos (12)]
 ```
-- **Tipo de Cuenta**: `10` (Ahorros), `20` (Corriente).
-- **Tipo de Saldo**: `01` (Saldo Contable / Ledger), `02` (Saldo Disponible / Available).
-- **Signo**: `C` (Crédito / Saldo positivo), `D` (Débito / Sobregiro).
-- **Monto**: 12 dígitos rellenados con ceros a la izquierda.
-
-**Ejemplo devuelto por la pasarela para $1,400.00:**
-```text
-1001840C000000140000 1002840C000000140000
-└──────┬───────────┘ └──────┬───────────┘
-   Saldo Contable      Saldo Disponible
++----------------+---------------------+--------+---------------------------+-----------------------+
+| longitud (2 B) | cabecera (opcional) | MTI    | bitmap(s) en hexadecimal  | campos en ASCII       |
+| big-endian     | "ISO015000050"      | "0200" | 16 o 32 caracteres        | según j8583.xml       |
++----------------+---------------------+--------+---------------------------+-----------------------+
 ```
 
----
+El bitmap secundario aparece cuando hay campos > 64 (DE 70, 90, 102, 103). La longitud no incluye los 2 bytes del prefijo.
 
-### 6.2. Catálogo de Códigos de Respuesta (Campo 39)
-| Código | Significado | Explicación Técnica |
-| :---: | :--- | :--- |
-| **`00`** | **Approved** | Transacción autorizada exitosamente. |
-| **`05`** | **Do Not Honor** | Tarjeta bloqueada preventivamente o rechazo general. |
-| **`14`** | **Invalid Card Number** | El número de tarjeta (PAN) no existe en la base del banco. |
-| **`51`** | **Insufficient Funds** | La cuenta no cuenta con saldo disponible suficiente para el débito. |
-| **`54`** | **Expired Card** | La fecha de expiración (YYMM) es anterior a la fecha actual. |
-| **`55`** | **Incorrect PIN** | El PIN Block enviado en el Campo 52 no coincide con el registrado. |
-| **`61`** | **Exceeds Withdrawal Limit** | La solicitud supera el límite diario de retiro en cajeros automáticos. |
-| **`68`** | **Response Received Too Late** | Tiempo de espera agotado (Timeout de conexión). |
-| **`91`** | **Issuer Switch Inoperative** | El banco emisor o enlace interbancario no responde. |
-| **`96`** | **System Error** | Error de formato en la trama ISO 8583 o excepción no controlada. |
+### 3.2 Campos usados
 
----
+| DE | Nombre | Formato | Uso |
+|---|---|---|---|
+| 2 | PAN | LLVAR | Tarjeta; también sirve para buscar la cuenta si no viene DE 102 |
+| 3 | Código de procesamiento | n6 | Tipo de operación (ver sección 1) |
+| 4 | Monto | n12 (centavos) | Monto de la transacción |
+| 7 | Fecha y hora de transmisión | MMddHHmmss | |
+| 11 | STAN | n6 | Idempotencia (con DE 37) |
+| 12 / 13 | Hora / fecha local | HHmmss / MMdd | |
+| 37 | RRN | an12 | Idempotencia; en 0420, RRN de la transacción a reversar |
+| 38 | Código de autorización | an6 | Solo en respuestas aprobadas |
+| 39 | Código de respuesta | an2 | Ver 3.3 |
+| 41 / 42 | Terminal / comercio | an8 / an15 | |
+| 49 | Moneda | n3 | 320 (GTQ) por defecto, 840 (USD) |
+| 52 | PIN block | an16 (hex) | ISO 9564 formato 0 (ver 3.4) |
+| 54 | Saldos | LLLVAR | Ver 3.5 |
+| 70 | Código de gestión de red | n3 | 301 = echo test |
+| 90 | Datos originales | an42 | Reversas |
+| 102 / 103 | Cuenta origen / destino | LLVAR | Transferencias usan DE 103 |
 
-## 7. Consideraciones de Seguridad Bancaria y Producción
+### 3.3 Códigos de respuesta (DE 39) y su origen
 
-En un despliegue bancario real de producción, la arquitectura implementada en este proyecto se complementa con los siguientes mecanismos de seguridad:
+| DE 39 | Significado | HTTP del Core | Origen |
+|---|---|---|---|
+| 00 | Aprobada | 200 | Core |
+| 05 | Tarjeta bloqueada / no honrar | 403 | Core (estado `BLOCKED`) |
+| 12 | Transacción inválida / MTI o DE 3 no soportado | 400 | Recolector o Core |
+| 13 | Monto inválido | 400 | Core |
+| 14 | Cuenta o tarjeta inexistente | 404 | Core |
+| 25 | Transacción original no encontrada (reversa) | 404 | Core |
+| 30 | Error de formato | 400 | Recolector (trama ilegible o sin DE obligatorios) o Core (JSON inválido) |
+| 51 | Fondos insuficientes | 422 | Core |
+| 54 | Tarjeta vencida | 410 | Core (estado `EXPIRED`) |
+| 55 | PIN incorrecto o ausente | 403 | Core |
+| 61 | Excede el límite diario | 429 | Core |
+| 68 | Tiempo de espera agotado | — | Recolector (timeout del RestClient) |
+| 75 | Excede los intentos de PIN (la tarjeta se bloquea) | 403 | Core (3 intentos) |
+| 91 | Emisor / host no disponible | 5xx o sin conexión | Recolector |
+| 96 | Error del sistema | — | Recolector |
 
-### 7.1. Cumplimiento de la Norma PCI-DSS
-- **Enmascaramiento de PAN**: El PAN nunca debe imprimirse ni registrarse en texto completo en logs de auditoría. Solo se exponen los primeros 6 dígitos (BIN) y los últimos 4 dígitos (`453200******0001`), tal como lo implementa [`IsoMsgHelper.maskPan()`](file:///c:/Users/Anthony/Desktop/8vo%20semestre/Desarrollo%20Web/Java%20JPOS%20PROYECTO/src/main/java/com/fintech/iso8583/gateway/util/IsoMsgHelper.java).
-- **Prohibición de Almacenamiento de Datos Sensibles**: Queda estrictamente prohibido persistir datos de la pista magnética completa (Track 2, F35), el código de seguridad (CVV2/CVC2) o el PIN Block.
+### 3.4 PIN block ISO 9564 formato 0 (DE 52)
 
-### 7.2. Módulos de Seguridad de Hardware (HSM - Hardware Security Modules)
-En producción, el Core Bancario no valida los PINs directamente en memoria con código Java. En su lugar, se integra con un dispositivo criptográfico físico certificado FIPS 140-2 Nivel 3 (como **Thales payShield 10K** o **Utimaco Atalla**):
-1. El POS o ATM cifra el PIN en el teclado físico usando una llave de trabajo (**TPK** - Terminal PIN Key).
-2. La pasarela recibe el PIN Block y le envía un comando al HSM para **traducción de PIN** (traduce de la llave de terminal TPK a la llave de zona **ZPK** de la red).
-3. El Core valida el PIN Offset o el hash PVV generado por el emisor dentro de la memoria segura del HSM sin exponer jamás el PIN en texto plano.
-
-### 7.3. Cifrado de Canal de Transporte
-Las conexiones TCP entre los datáfonos/cajeros y la pasarela jPOS deben estar protegidas mediante:
-- **TLS 1.3 con Autenticación Mutua (mTLS)**: Tanto el servidor jPOS como la terminal POS/ATM presentan certificados digitales X.509 para autenticarse mutuamente, evitando ataques de hombre en el medio (MITM) o suplantación de terminales.
-
-### 7.4. Datos del Chip EMV (Campo 55)
-Para tarjetas con chip inteligente, la terminal lee los tags criptográficos EMV (Tag 9F26 Criptograma de Aplicación ARQC, Tag 82 AIP, Tag 9F36 ATC) y los empaqueta en el Campo 55 en formato TLV (*Tag-Length-Value*). El switch retransmite estos tags al emisor para verificar la autenticidad física del microcircuito de la tarjeta contra clonaciones.
-
----
-
-## 8. Verificación y Resultados de Pruebas
-
-El proyecto cuenta con una suite completa de pruebas unitarias y de integración en [`GatewayIntegrationTest.java`](file:///c:/Users/Anthony/Desktop/8vo%20semestre/Desarrollo%20Web/Java%20JPOS%20PROYECTO/src/test/java/com/fintech/iso8583/gateway/GatewayIntegrationTest.java):
-
-```text
-[INFO] Running com.fintech.iso8583.gateway.GatewayIntegrationTest
-[INFO] Tests run: 11, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 1.975 s
-[INFO] BUILD SUCCESS
+```
+PIN 1234, PAN 4532000000000001
+bloque PIN = 0 | longitud | PIN | relleno F                -> 041234FFFFFFFFFF
+bloque PAN = 0000 | 12 dígitos del PAN sin el verificador  -> 0000200000000000
+DE 52      = bloque PIN XOR bloque PAN                     -> 041214FFFFFFFFFF
 ```
 
-### Casos de Prueba Verificados:
-1. `testPosEcho`: Verifica handshake de red 0800 -> 0810 en canal POS.
-2. `testPosPurchaseApproved`: Compra de $100.00 con tarjeta activa (0200 -> 0210, RC=00).
-3. `testPosPurchaseInsufficientFunds`: Compra rechazada por fondos insuficientes (0200 -> RC=51).
-4. `testPosPurchaseExpiredCard`: Compra rechazada por tarjeta vencida (0200 -> RC=54).
-5. `testPosPurchaseReversal`: Compra seguida de reversa 0420 con validación del reintegro de saldo.
-6. `testAtmEcho`: Handshake de red 0800 -> 0810 en canal ATM.
-7. `testAtmBalanceInquiry`: Consulta de saldo 0100 -> 0110 con verificación del Campo 54.
-8. `testAtmWithdrawalApproved`: Retiro de efectivo de $50.00 (0200 -> 0210) con actualización de saldos.
-9. `testAtmWithdrawalWrongPin`: Retiro rechazado por PIN incorrecto (RC=55).
-10. `testAtmWithdrawalExceedsDailyLimit`: Retiro de $999.00 rechazado por superar límite diario de $500.00 (RC=61).
-11. `testAtmDispenserFailureReversal`: Simulación de atasco en dispensador de billetes de ATM con reversa automática 0420 y restauración del balance.
+El Core recupera el PIN con el PAN de la cuenta y lo compara en tiempo constante contra `SHA-256("numeroCuenta:PIN")`. En producción el bloque viajaría cifrado bajo una ZPK y se verificaría dentro de un HSM; aquí viaja en claro para poder demostrar la validación de extremo a extremo.
+
+### 3.5 Saldos (DE 54)
+
+Dos bloques de 20 caracteres: tipo de cuenta (`10`), tipo de monto (`01` contable, `02` disponible), moneda (DE 49), signo (`C` crédito / `D` débito) y 12 dígitos en centavos. Ejemplo para Q1,400.00: `1001320C0000001400001002320C000000140000`.
 
 ---
 
-## 9. Arquitectura Headless REST API y Colección de Postman
+## 4. Core Bancario
 
-La solución opera como un **Backend Transaccional Headless (Sin interfaz gráfica visual)**, exponiendo una API RESTful completa en JSON sobre Spring Boot 3 que se conecta a los sockets TCP de jPOS.
+Tablas (`init_sqlserver.sql`, idempotente y con migración desde la versión anterior):
 
-### 9.1. ¿Cómo se comunican los Endpoints REST y los Sockets ISO 8583?
-Los controladores Spring Boot (`PosTransactionController`, `AtmTransactionController`) actúan como pasarelas de enlace:
-1. Una aplicación cliente (Postman, microservicio o backend adquirente) envía una petición HTTP POST a un endpoint como `/api/pos/purchase` o `/api/atm/withdrawal`.
-2. El controlador Spring Boot abre un socket TCP local contra el puerto `15000` (POS) o `15001` (ATM) usando `ASCIIChannel` de jPOS.
-3. Se serializa la trama real `ISOMsg` conforme al estándar ISO 8583:1987, se transmite por TCP al `ISOServer`, y el `RequestListener` procesa la lógica bancaria debitando o consultando el `BankCoreService`.
-4. El servidor emite la respuesta `0210` / `0110` / `0430` a través del socket.
-5. El controlador traduce la trama ISO recibida en un JSON estructurado de alta fidelidad que incluye el código de respuesta (F39), código de autorización (F38), balances (F54), y el desglose de cada campo ISO transmitido y recibido.
+- `cuentas`: número de cuenta (único), PAN, titular, saldos disponible y contable, límite diario, retirado hoy y fecha del último retiro, estado (`ACTIVE`, `BLOCKED`, `EXPIRED`), `pin_hash`, intentos de PIN fallidos, banco.
+- `transacciones`: RRN, STAN (`UNIQUE(rrn, stan)`), cuentas, monto, tipo, saldos antes y después, DE 39, autorización, terminal, fecha. Índices: número de cuenta (único), PAN, `(rrn, stan)` único, cuenta y RRN de las transacciones.
 
-### 9.2. Colección Oficial de Postman (`postman_collection.json`)
-El archivo [`postman_collection.json`](file:///c:/Users/Anthony/Desktop/8vo%20semestre/Desarrollo%20Web/Java%20JPOS%20PROYECTO/postman_collection.json) en la raíz del repositorio incluye 22 peticiones organizadas con nombres fáciles e intuitivos en español:
-1. **01 - Probar Conexión y Diagnóstico (Echo 0800)**: Directorio de endpoints, estado del switch con métricas y Echo tests de datáfono y cajero sobre TCP.
-2. **02 - Tarjetas y Cuentas (Saldos y Bloqueos)**: Listar tarjetas, consultar saldo por PAN, bloquear tarjeta (RC 05), desbloquear tarjeta, vencer tarjeta (RC 54) y reiniciar a saldos originales.
-3. **03 - Pagos con Datáfono (POS - Compras 0200 y Respuestas 0210)**: Compra exitosa aprobada con código de autorización en F38, rechazo por falta de dinero (RC 51), rechazo por tarjeta vencida (RC 54), rechazo por tarjeta bloqueada (RC 05), preautorización de hotel/auto (0100) y anulación/reversa por fallo de papel en impresora (0420).
-4. **04 - Cajero Automático (ATM - Retiros con PIN y Saldos)**: Consultar saldo en pantalla con Campo 54, retirar efectivo exitoso con clave PIN criptográfica (F52), rechazo por PIN incorrecto (RC 55), rechazo por límite diario (RC 61), rechazo por falta de saldo (RC 51) y anulación/reversa por atasco de billetes en dispensador (0420).
-5. **05 - Historial y Auditoría de Operaciones**: Bitácora transaccional completa y búsqueda por RRN/STAN.
+Reglas:
+
+- **Concurrencia:** la fila de la cuenta se lee con bloqueo pesimista (`UPDLOCK, HOLDLOCK, ROWLOCK` en SQL Server). En transferencias se bloquean ambas cuentas **en orden de id** para evitar interbloqueos. La BD usa `READ_COMMITTED_SNAPSHOT` para que las consultas no esperen a los débitos.
+- **Validaciones en orden:** cuenta existente (14) → estado (05/54) → PIN si la operación lo exige o si viene (55/75) → monto (13) → límite diario de retiro (61) → saldo (51).
+- **PIN obligatorio** en retiros, consultas y transferencias. Un PIN correcto reinicia los intentos; el tercero fallido bloquea la tarjeta.
+- **Reversa:** busca la transacción original aprobada por RRN, acredita su monto (y revierte el acumulado diario si era retiro) una sola vez; si no existe responde 25.
+- **Rendimiento en SQL Server:** `sendStringParametersAsUnicode=false` (los parámetros `VARCHAR` usan los índices con *seek* en vez de *scan*), una sola consulta para buscar y bloquear la cuenta, y la idempotencia delegada a la restricción única en lugar de una consulta previa.
 
 ---
 
-## 10. Nombres Fáciles en Español y Catálogo Oficial en PDF (MTI 0210)
+## 5. Seguridad
 
-### 10.1. Directorio de Rutas REST Fáciles en Español
-Para máxima simplicidad y legibilidad en entornos en español, se habilitaron rutas amigables en todos los controladores Spring Boot:
+| Superficie | Control |
+|---|---|
+| `POST /api/core/transacciones` | Solo el Recolector (cabecera `X-API-Key`, comparación en tiempo constante) o un administrador |
+| Altas, ediciones, recargas, bloqueos, borrados, reset, `/actuator/metrics` | Rol `ADMIN` con HTTP Basic (usuario/contraseña por variables de entorno, BCrypt) |
+| Interfaz web | El login se valida contra `/api/core/admin/sesion`; las credenciales solo viven en memoria de la pestaña; un 401 cierra la sesión |
+| PIN | Nunca se guarda ni se devuelve en claro: hash SHA-256 en BD, PIN block en la trama, eliminado de las respuestas |
+| API | Sin sesión ni cookies (stateless), por eso CSRF no aplica; respuestas 401 sin `WWW-Authenticate` para que el navegador no muestre su diálogo nativo |
+| Contenedor | Distroless sin shell, usuario `nonroot` (65532), solo el binario |
 
-| Acción Transaccional | Ruta Fácil en Español | Ruta Técnica Estándar | Trama ISO 8583 |
-| :--- | :--- | :--- | :--- |
-| **Probar Conexión Datáfono** | `GET /api/conexion?channel=POS` | `GET /api/echo?channel=POS` | MTI 0800 &rarr; 0810 |
-| **Probar Conexión Cajero** | `GET /api/conexion?channel=ATM` | `GET /api/echo?channel=ATM` | MTI 0800 &rarr; 0810 |
-| **Ver Estado y Métricas** | `GET /api/estado` | `GET /api/status` | Métricas en Memoria |
-| **Ver Todas las Cuentas** | `GET /api/cuentas` | `GET /api/accounts` | Core Emisor |
-| **Consultar Saldo por Tarjeta** | `GET /api/cuentas/{pan}` | `GET /api/accounts/{pan}` | Core Emisor |
-| **Cambiar Estado (Bloquear)** | `POST /api/cuentas/cambiar-estado` | `POST /api/accounts/status` | Core Emisor |
-| **Restaurar Saldos de Fábrica** | `POST /api/cuentas/restaurar` | `POST /api/accounts/reset` | Core Emisor |
-| **Compra en Datáfono** | `POST /api/pos/compra` | `POST /api/pos/purchase` | MTI 0200 &rarr; **0210 (RC 00)** |
-| **Preautorización POS** | `POST /api/pos/preautorizacion` | `POST /api/pos/preauth` | MTI 0100 &rarr; 0110 |
-| **Anular Compra (Reversa)** | `POST /api/pos/anular` | `POST /api/pos/reversal` | MTI 0420 &rarr; 0430 |
-| **Consultar Saldo en Cajero** | `POST /api/atm/consultar-saldo` | `POST /api/atm/inquiry` | MTI 0100 &rarr; 0110 (F54) |
-| **Retirar Dinero en Cajero** | `POST /api/atm/retiro` | `POST /api/atm/withdrawal` | MTI 0200 &rarr; **0210 (RC 00/F54)** |
-| **Anular Retiro por Atasco** | `POST /api/atm/anular` | `POST /api/atm/reversal` | MTI 0420 &rarr; 0430 (F90) |
-| **Ver Historial de Auditoría** | `GET /api/historial` | `GET /api/transactions` | Auditoría Transaccional |
+---
 
-### 10.2. Catálogo Oficial en PDF: Transacciones Tipo 0210
-Se incluye en la raíz del repositorio el documento generado:
-👉 [`Catalogo_Transacciones_ISO8583_0210.pdf`](file:///c:/Users/Anthony/Desktop/8vo%20semestre/Desarrollo%20Web/Java%20JPOS%20PROYECTO/Catalogo_Transacciones_ISO8583_0210.pdf)
+## 6. Mediciones y metodología
 
-Este documento PDF de alta calidad editorial contiene:
-1. **Anatomía del MTI 0210**: Explicación de los 4 dígitos (Versión 1987, Financiero, Respuesta, Adquirente).
-2. **Listado Exhaustivo de las 10 Transacciones 0210 y Qué Hace Cada Una**: Compras estándar (F3 `000000`), Retiros en ATM (F3 `010000`), Compras con Cash-back (`090000`), Avances de Efectivo (`013000`), Reembolsos (`200000`), Recaudos de Servicios Públicos (`500000`), Transferencias (`401020`), Depósitos en cajero (`210000`), Recargas electrónicas (`280000`) y Autorizaciones forzadas offline.
-3. **Campos ISO 8583 en la Trama 0210**: Desglose de F2 a F54 con su formato, reglas de negocio y presencia.
-4. **Estructura Interna del Campo 54**: Desglose de saldos contable y disponible de 20 caracteres por saldo en cajeros automáticos.
-5. **Diccionario Completo del Campo 39 (Action Codes)**: Explicación de los 19 códigos de respuesta más comunes en la banca (`00`, `01`, `04`, `05`, `12`, `14`, `30`, `41`, `43`, `51`, `54`, `55`, `58`, `61`, `65`, `68`, `75`, `91`, `96`).
-6. **Mecanismos de Reversa 0420 / 0430**: Flujo de compensación ante atasco de billetes en ATM o fallo de papel en datáfono, y anatomía del Campo 90 (*Original Data Elements*).
-7. **Ejemplos Reales de Tramas Decodificadas**: Tramas 0200 y 0210 de compra en POS y retiro en ATM con PIN Block y balances.
+### 6.1 Entorno
 
+- 4 vCPU compartidas, 15 GB de RAM, Linux. La aplicación, **SQL Server 2022 (Docker)** y el generador de carga (**JMeter 5.6.3 sobre Java 21**) corren en la misma máquina, por lo que compiten por la CPU.
+- Binario nativo: GraalVM CE 25.0.2, Serial GC, sin opciones de memoria (salvo donde se indica).
+- JVM: GraalVM JDK 25.0.2 en modo JVM, `-XX:+UseZGC -Xmx1g` (ZGC generacional, el único modo desde JDK 24).
+
+### 6.2 Arranque y memoria
+
+- **Arranque:** valor de `Started RecolectorApplication in X seconds` en tres ejecuciones consecutivas, con SQL Server ya disponible.
+- **RSS:** `VmRSS` de `/proc/<pid>/status` tras arrancar, y el máximo muestreado cada segundo durante la prueba de carga.
+
+| | Nativo | JVM |
+|---|---|---|
+| Arranque | 0,54 s · 0,51 s · 0,60 s (0,73 s el más lento observado) | 8,9 s (21 s con caché de disco fría) |
+| RSS tras arrancar | 250-251 MB (114 MiB según `docker stats` en el contenedor) | 930 MB |
+| RSS máximo bajo carga | 708 MB (sin límite de heap) · 492 MB con `-Xmx256m` | 1.361 MB |
+
+El arranque nativo está distribuido entre ~480 beans (perfil por bean con el log de `DefaultListableBeanFactory`): ningún componente domina; los mayores son la creación del `DataSource` (~50 ms), los endpoints de Actuator (~45 ms), Spring Integration (~40 ms) y Spring MVC (~40 ms). La inicialización diferida (`spring.main.lazy-initialization=true`) solo lo bajó a ~0,40-0,49 s, a cambio de mover ese costo a la primera transacción, por lo que no se activó.
+
+### 6.3 Rendimiento (TPS)
+
+Plan `load-test-iso8583.jmx`: 100 terminales con conexión TCP persistente, rampa de 5 s, 60 s de medición, retiros 0200 de Q0.01 con PIN block (cada uno pasa por parseo, idempotencia, HTTP al Core, validación de PIN, bloqueo de fila, débito e inserción). En JVM se ejecutó antes un calentamiento de 30 s. Resultados del reporte HTML de JMeter (`statistics.json`):
+
+| | Transacciones | Errores | TPS | Media | p90 | p95 | p99 |
+|---|---|---|---|---|---|---|---|
+| Nativo | 31.089 | 0 | **518,6** | 184,6 ms | 296 ms | 335 ms | 459 ms |
+| Nativo `-Xmx256m` | 26.189 | 0 | 437,0 | 218,8 ms | 355 ms | 416 ms | 571 ms |
+| JVM + ZGC | 30.993 | 0 | **516,4** | 185,1 ms | 261 ms | 309 ms | 419 ms |
+
+La misma prueba lanzada como lo hará el usuario (`docker compose --profile carga run --rm jmeter`: contenedor nativo en Distroless, 200 terminales, 60 s) dio **514,0 TPS con 0 errores** (30.957 transacciones; p95 781 ms, p99 1.143 ms por la cola más larga).
+
+Con 4 vCPU repartidas entre la app, SQL Server y JMeter la CPU queda saturada en ~520 TPS en ambos modos; las latencias reflejan la cola de 100 terminales sobre una CPU llena. **La meta de 2.000 TPS no se alcanzó en este equipo.** Para evaluarla se necesita hardware con más núcleos y, de preferencia, el generador de carga y SQL Server en máquinas separadas; el plan y la imagen Docker de JMeter están listos para repetir la medición (README, sección 6).
+
+### 6.4 Pausas de GC y pinning
+
+- **ZGC (modo JVM)**, registro `-Xlog:gc*` durante el calentamiento y la medición: 120 pausas, media **0,038 ms**, p99 **0,19 ms**, máxima **0,90 ms** (meta ≤ 1 ms).
+- `LoadTestSimulationTest` repite la validación en cada `mvn verify`: lanza carga concurrente por TCP con un `RecordingStream` de JFR activo y falla si alguna pausa (`jdk.GarbageCollection#longestPause`) supera 1 ms o si hay eventos `jdk.VirtualThreadPinned` atribuibles al código de la aplicación (o de 20 ms o más). Última ejecución: 5.000 transacciones aprobadas, 522 TPS, pausa máxima **0,071 ms**, 1 evento de pinning interno del JDK y **0** atribuibles a la aplicación.
+- **Binario nativo:** GraalVM Community solo incluye Serial GC en imágenes nativas, por lo que la meta de pausas se evalúa en modo JVM.
+
+### 6.5 Cobertura
+
+JaCoCo sobre la suite completa (119 pruebas, 0 fallos): **96,7 % de líneas**, **84,5 % de ramas**, 97,0 % de instrucciones y 99,6 % de métodos. `mvn verify` falla si la cobertura de líneas baja de 80 % (`jacoco:check`).
+
+---
+
+## 7. Estrategia de pruebas
+
+- **Unitarias:** j8583 (parseo, codificación, bitmaps, campos variables, tramas corruptas), PIN block, catálogo de códigos, mapeo de tipo de operación, idempotencia y orquestación con dobles de prueba.
+- **Integración con WireMock:** el `RestClient` contra un Core simulado: cada estado HTTP y cuerpo posible, reintentos ante 5xx y caídas, timeouts, envío de la API Key.
+- **Integración con Spring (H2 en modo MSSQL):** servicio y API del Core con concurrencia real (hilos simultáneos sobre la misma cuenta sin pérdidas de actualización, duplicados simultáneos aplicados una sola vez), seguridad y validaciones.
+- **Extremo a extremo:** socket TCP real → Recolector → HTTP → Core → BD, con el enmarcado de 2 bytes, keep-alive, todos los MTI y retransmisiones.
+- **Carga:** `LoadTestSimulationTest` (JFR: ZGC y pinning) y el plan JMeter contra la aplicación real con SQL Server.
+- **Interfaz web:** flujo del cajero y del administrador verificado en Chromium (Playwright) contra la aplicación real: PIN incorrecto → 55 → reingreso, retiro, reversa, estado de cuenta, login validado por el servidor, alta/edición de PIN/borrado y cierre de sesión ante 401.
+- **Postman:** la colección incluye pruebas automáticas y se ejecutó completa con Newman contra el binario nativo.
+
+---
+
+## 8. Limitaciones y trabajo futuro
+
+- **PIN en claro dentro del PIN block:** en producción se cifraría con una ZPK y se verificaría en un HSM; el socket TCP debería ir sobre TLS (mTLS con las terminales).
+- **2.000+ TPS:** no medido en hardware adecuado; pasos para escalar: más núcleos, SQL Server dedicado, varias instancias del Recolector detrás de un balanceador TCP (la idempotencia en BD lo permite), y procesar el Core en el mismo proceso cuando no se requiera el salto HTTP.
+- **Arranque < 100 ms:** posible separando el Core Bancario (JPA/Hibernate) del Recolector en servicios distintos; el Recolector sin JPA tendría muchos menos beans.
+- **Caché de idempotencia local:** con varias instancias del Recolector, la deduplicación rápida debería moverse a un almacén compartido (la garantía fuerte ya está en la BD).

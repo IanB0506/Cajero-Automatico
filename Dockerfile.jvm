@@ -53,7 +53,8 @@ ENV SERVER_PORT=8087
 # ZGC generacional (único modo de ZGC desde JDK 24): pausas sub-milisegundo
 ENV JAVA_OPTS="-XX:+UseZGC -XX:MaxRAMPercentage=75"
 
+# La imagen no trae curl: la propia aplicación consulta /actuator/health y devuelve 0 (UP) o 1
 HEALTHCHECK --interval=10s --timeout=5s --start-period=60s --retries=5 \
-  CMD curl -fsS "http://localhost:${SERVER_PORT}/actuator/health" > /dev/null || exit 1
+  CMD ["java", "-Xmx64m", "-XX:TieredStopAtLevel=1", "-jar", "/app/app.jar", "--healthcheck"]
 
 ENTRYPOINT ["sh", "-c", "exec java $JAVA_OPTS -jar /app/app.jar"]
