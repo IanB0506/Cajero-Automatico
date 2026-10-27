@@ -15,7 +15,16 @@ Switch transaccional que recibe tramas **ISO 8583** por **TCP**, las traduce a u
 | Pruebas | JUnit 6, AssertJ, Mockito, MockMvc, WireMock 3, JaCoCo, JFR |
 | Carga | Apache JMeter 5.6.3 |
 
-La documentación técnica (decisiones de diseño, formato de las tramas, metodología y resultados de las mediciones) está en **[DOCUMENTACION.md](DOCUMENTACION.md)**.
+### Documentación del proyecto
+
+| Documento | Contenido |
+|---|---|
+| `README.md` (este archivo) | Instalación con Docker, uso, arquitectura, cumplimiento de la guía, pruebas, carga y resultados |
+| [`DOCUMENTACION.md`](DOCUMENTACION.md) | Reporte técnico: decisiones de diseño, formato de las tramas, Core Bancario, seguridad, metodología y mediciones |
+| `MANUAL_DE_USUARIO_RED_NEXUS.pdf` | Manual de usuario del cajero web y del panel de administración (con capturas) |
+| `MANUAL_TECNICO_RED_NEXUS_ISO8583.pdf` | Manual técnico: arquitectura, protocolo, base de datos, API REST, configuración, despliegue y operación |
+| `postman_collection.json` | Colección de Postman con pruebas automáticas |
+| `docs/manuales/` | Fuentes HTML de los dos manuales (para regenerar los PDF: abrir en Chrome o Edge → Imprimir → Guardar como PDF) |
 
 ---
 
@@ -94,7 +103,7 @@ Si cambias `MSSQL_SA_PASSWORD` después del primer arranque, ejecuta `docker com
 | 1001-2002-3004 | 4000000000000004 | Ana Morales | Q1,000.00 | Q500.00 | BLOCKED | 9999 |
 | 1001-2002-3005 | 4000000000000005 | Pedro Ramos | Q10.00 | Q100.00 | ACTIVE | 1111 |
 
-El PIN se guarda solo como hash SHA-256; la interfaz y la API nunca lo muestran. **Administración → Restaurar** (o `POST /api/core/reset`) devuelve estas cuentas a sus valores iniciales y limpia el historial.
+El PIN se guarda solo como hash SHA-256; la interfaz y la API nunca lo muestran. **Administración → Restaurar datos** (o `POST /api/core/reset`) devuelve estas cuentas a sus valores iniciales y limpia el historial.
 
 ### Cajero web (http://localhost:8087)
 
@@ -249,8 +258,8 @@ Medidos en el entorno de desarrollo de esta entrega: **4 vCPU compartidas**, don
 
 Requisitos: **JDK 25** (Temurin o GraalVM), Maven 3.9 y SQL Server accesible.
 
-1. Crear la BD y los datos: ejecutar `init_sqlserver.sql` sobre una BD `CoreBancario5B` (es idempotente; migra versiones anteriores).
-2. Ajustar la conexión en `src/main/resources/application.yaml` o con variables de entorno: `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME`, `SPRING_DATASOURCE_PASSWORD`.
+1. Crear la BD y los datos: ejecutar `init_sqlserver.sql` sobre una BD `CoreBancario5B` (es idempotente: crea lo que falta sin borrar datos).
+2. La conexión por defecto (`src/main/resources/application.yaml`) es `127.0.0.1:1434`, usuario `sa`, contraseña `admin`; cámbiala ahí o con las variables de entorno `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` y `SPRING_DATASOURCE_PASSWORD`. La app queda en el puerto `8087` (HTTP) y `15000` (TCP).
 3. Ejecutar:
 
 ```powershell
@@ -270,7 +279,8 @@ Demostración sugerida (15 minutos):
 2. **Demo en vivo (4 min):**
    - `docker compose ps` → `cajero-app` *healthy* (HEALTHCHECK del propio binario: Distroless no tiene shell ni curl).
    - `docker compose logs app | findstr Started` → tiempo de arranque del binario nativo.
-   - Cajero web: retiro con PIN correcto → 00; PIN incorrecto → 55; reversa del retiro → 0430 y saldo restaurado; visor de bitmap y trama.
+   - Cajero web: retiro con PIN correcto → 00; PIN incorrecto → 55; reversa del retiro → 0430 y saldo restaurado.
+   - Consola ISO 8583 (panel de administración): tramas enviada y recibida, bitmap y DE 39 de una transacción.
    - Postman Runner: 30 peticiones en verde (incluye retransmisión idempotente y 401 sin credenciales).
 3. **Nativo y Distroless (3 min):** `Dockerfile` multi-etapa; `IsoAotRuntimeHints`; `docker images` (tamaño); `docker exec cajero-app sh` falla porque no existe shell (superficie de ataque mínima); usuario `nonroot`.
 4. **Pruebas y métricas (4 min):** `docker compose --profile tests run --rm tests` → reporte JaCoCo; `docker compose --profile carga run --rm jmeter` → reporte HTML; tabla de la sección 7 y explicación de la metodología y límites del equipo.
@@ -288,9 +298,12 @@ Preguntas probables y dónde está la respuesta: idempotencia ante duplicados si
 ├── Dockerfile.jmeter        # JMeter 5.6.3 (Java 21) para la prueba de carga
 ├── docker-compose.yml       # sqlserver, db-init, app, tests (perfil), jmeter (perfil)
 ├── .env                     # Puertos, credenciales y selección de Dockerfile
-├── init_sqlserver.sql       # Esquema, migración e índices de CoreBancario5B (idempotente)
+├── init_sqlserver.sql       # Esquema, índices y datos semilla de CoreBancario5B (idempotente)
 ├── postman_collection.json  # Colección con autenticación y pruebas automáticas
 ├── DOCUMENTACION.md         # Reporte técnico
+├── MANUAL_DE_USUARIO_RED_NEXUS.pdf
+├── MANUAL_TECNICO_RED_NEXUS_ISO8583.pdf
+├── docs/manuales/           # Fuentes HTML y capturas de los manuales
 └── src
     ├── main/java/com/banco/recolector
     │   ├── RecolectorApplication.java      # Arranque y modo --healthcheck

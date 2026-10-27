@@ -1,6 +1,6 @@
 # Reporte técnico: Recolector Transaccional ISO 8583
 
-Documento de diseño y resultados del proyecto. Para instalar y ejecutar, ver el [README](README.md).
+Documento de diseño y resultados del proyecto. Para instalar y ejecutar, ver el [README](README.md); para el uso del cajero, el **Manual de Usuario** (`MANUAL_DE_USUARIO_RED_NEXUS.pdf`), y para la referencia de operación y API, el **Manual Técnico** (`MANUAL_TECNICO_RED_NEXUS_ISO8583.pdf`).
 
 ## Contenido
 
@@ -70,7 +70,7 @@ sequenceDiagram
 
 - `j8583.xml` define una guía de parseo por MTI. Cada respuesta declara todos los campos que puede devolver, y `IsoMessageService.createResponse` elimina de la respuesta cualquier campo que no esté en su guía y el PIN block (DE 52): la terminal siempre puede parsear la respuesta y el PIN nunca regresa.
 - `GuiasMessageFactory` expone las guías de parseo para saber qué campos admite cada respuesta.
-- Una trama ilegible (bitmap inválido, longitud incoherente, MTI desconocido) no cierra la conexión: se responde una trama válida con **DE 39 = 30**; un error inesperado responde **96**.
+- Una trama ilegible (bitmap inválido, longitudes incoherentes o un MTI sin guía de parseo) no cierra la conexión: se responde una trama válida con **DE 39 = 30**. Un MTI que se puede leer pero no es una solicitud soportada responde **12**, y un error inesperado **96**.
 
 ### 2.3 Adaptador hacia el Core: RestClient + RetryTemplate
 
@@ -81,7 +81,7 @@ sequenceDiagram
 
 ### 2.4 Idempotencia en dos niveles
 
-1. **Recolector (`IdempotenciaService`):** caché en memoria por `RRN:STAN` con expiración (60 s) y tamaño máximo (50.000). Una retransmisión de la terminal recibe exactamente la misma trama sin llamar al Core. Los errores transitorios (68, 91, 96) **no** se guardan para que la retransmisión vuelva a intentarse.
+1. **Recolector (`IdempotenciaService`):** caché en memoria por `RRN:STAN` con expiración (60 minutos) y tamaño máximo (50.000 entradas). Una retransmisión de la terminal recibe exactamente la misma trama sin llamar al Core. Los errores transitorios (68, 91, 96) **no** se guardan para que la retransmisión vuelva a intentarse.
 2. **Core (`CoreBancarioService`):** restricción `UNIQUE(rrn, stan)` en `transacciones`. Si llegan dos solicitudes iguales a la vez, la segunda falla al insertar, su transacción de BD se revierte completa (incluido el débito) y se devuelve la respuesta de la primera. Así la garantía no depende de la caché ni de que haya una sola instancia del Recolector.
 
 ### 2.5 Imagen nativa y Distroless
@@ -166,7 +166,7 @@ Dos bloques de 20 caracteres: tipo de cuenta (`10`), tipo de monto (`01` contabl
 
 ## 4. Core Bancario
 
-Tablas (`init_sqlserver.sql`, idempotente y con migración desde la versión anterior):
+Tablas (`init_sqlserver.sql`; el script es idempotente: crea lo que falta sin borrar datos, y si encuentra una columna `pin` en claro la convierte a `pin_hash` y la elimina):
 
 - `cuentas`: número de cuenta (único), PAN, titular, saldos disponible y contable, límite diario, retirado hoy y fecha del último retiro, estado (`ACTIVE`, `BLOCKED`, `EXPIRED`), `pin_hash`, intentos de PIN fallidos, banco.
 - `transacciones`: RRN, STAN (`UNIQUE(rrn, stan)`), cuentas, monto, tipo, saldos antes y después, DE 39, autorización, terminal, fecha. Índices: número de cuenta (único), PAN, `(rrn, stan)` único, cuenta y RRN de las transacciones.

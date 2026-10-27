@@ -153,7 +153,7 @@
       </button>
       <button onclick="switchTab('simulador')" id="tab-btn-simulador" class="tab-btn px-4 py-2 rounded-t-lg font-bold text-xs flex items-center space-x-2 bg-slate-800/60 hover:bg-slate-800 text-slate-400 hover:text-white transition">
         <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-        <span>Consola ISO 8583 (Socket :15000)</span>
+        <span>Consola ISO 8583</span>
       </button>
       <div class="flex-1 flex justify-end items-center pr-2">
         <span class="text-[10px] text-cyan-400 font-mono font-bold bg-slate-950 px-2.5 py-1 rounded border border-slate-800 hidden sm:inline-block">
@@ -437,7 +437,7 @@
                 <!-- Caja Destacada de Monto y Saldo con Paleta del Banco -->
                 <div id="rcpt-monto-box" class="p-2.5 rounded-xl border border-slate-300 bg-slate-100 my-2 transition-colors duration-300">
                   <div class="flex justify-between font-black text-sm">
-                    <span class="text-slate-700">MONTO DISPENSADO:</span>
+                    <span id="rcpt-monto-label" class="text-slate-700">MONTO DISPENSADO:</span>
                     <span id="rcpt-monto" class="text-slate-950 font-black font-mono">Q. 200.00</span>
                   </div>
                   <div class="flex justify-between text-[11px] font-bold text-slate-600 mt-0.5">
@@ -552,6 +552,10 @@
           <button onclick="cargarDatosAdmin()" class="px-3.5 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-xs font-bold transition flex items-center space-x-1.5 border border-slate-700">
             <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg>
             <span>Actualizar</span>
+          </button>
+          <button onclick="resetearCuentasCore()" class="px-3.5 py-1.5 bg-rose-950/80 hover:bg-rose-900 text-rose-200 rounded-lg text-xs font-bold transition flex items-center space-x-1.5 border border-rose-700/60" title="Devuelve las 5 cuentas de demostración a su estado inicial y borra el historial">
+            <svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 10h10a5 5 0 015 5v2M3 10l4-4M3 10l4 4"/></svg>
+            <span>Restaurar datos</span>
           </button>
         </div>
       </div>
@@ -2133,15 +2137,30 @@
               <div class="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mx-auto"></div>
               <p class="text-sm font-bold text-amber-300 tracking-wide">PROCESANDO TRANSACCIÓN...</p>
               <p class="text-xs text-blue-200">COMUNICANDO CON EL RUTEADOR SPRING BOOT VÍA VIRTUAL THREADS</p>
-              <p class="text-[10px] font-mono text-slate-400">Enviando Trama ISO 8583 MTI 0200...</p>
+              <p class="text-[10px] font-mono text-slate-400">Enviando Trama ISO 8583 MTI ${ATM_STATE.mtiEnCurso || '0200'}...</p>
             </div>
           `;
           break;
 
         case 'SUCCESS':
-          statusMsg.innerText = "TRANSACCIÓN EXITOSA • TOME SU RECIBO Y EFECTIVO";
           actualizarBotonesBezel(['R1', 'R2', 'R4']);
           const res = ATM_STATE.lastTxResult;
+          const mtiOk = res.mtiSolicitud || '0200';
+          statusMsg.innerText = mtiOk === '0200' ? "TRANSACCIÓN EXITOSA • TOME SU RECIBO Y EFECTIVO"
+            : (mtiOk === '0420' ? "REVERSA APLICADA • SALDO RESTITUIDO" : "ECHO TEST EXITOSO • ENLACE CON EL SWITCH ACTIVO");
+          const importeHtml = mtiOk === '0800'
+            ? `<div class="flex justify-between items-center text-[10px]">
+                    <span class="text-slate-300 font-semibold">ENLACE:</span>
+                    <span class="text-emerald-400 font-black">ACTIVO (0810)</span>
+                  </div>`
+            : `<div class="flex justify-between items-center text-[10px]">
+                    <span class="text-slate-300 font-semibold">${mtiOk === '0420' ? 'REVERSADO:' : 'RETIRADO:'}</span>
+                    <span class="text-emerald-400 font-black mono-num">Q. ${Number(res.monto || 0).toFixed(2)}</span>
+                  </div>
+                  <div class="border-t border-slate-700/50 pt-0.5 flex justify-between items-center text-[8.5px]">
+                    <span class="text-slate-400">SALDO DISP:</span>
+                    <span class="text-cyan-300 font-bold mono-num">Q. ${Number(res.saldoDisponible || 0).toFixed(2)}</span>
+                  </div>`;
           const fechaStr = res.timestamp || new Date().toLocaleString();
           const bancoNombre = res.bancoEmisor || ATM_STATE.banco || 'BANCO INDUSTRIAL';
           const panMasked = (res.panEnmascarado && res.panEnmascarado !== 'null') ? res.panEnmascarado : 
@@ -2152,28 +2171,21 @@
               <div class="flex-1 bg-slate-950/90 border border-amber-400/80 rounded-xl p-2.5 flex flex-col justify-between overflow-hidden shadow-xl font-mono text-[9px]">
                 <div class="border-b border-dashed border-amber-400/50 pb-1 flex items-center justify-between">
                   <span class="font-black text-amber-300 text-xs truncate max-w-[150px]">${bancoNombre}</span>
-                  <span class="text-[8.5px] px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-200 border border-amber-500/30 whitespace-nowrap">MTI 0210</span>
+                  <span class="text-[8.5px] px-1.5 py-0.5 rounded bg-amber-950/60 text-amber-200 border border-amber-500/30 whitespace-nowrap">MTI ${res.mtiRespuesta || '0210'}</span>
                 </div>
 
                 <div class="grid grid-cols-2 gap-x-1.5 gap-y-0.5 text-[8.5px] my-1">
                   <div><span class="text-slate-400">TARJETA:</span> <span class="text-white font-bold">${panMasked}</span></div>
-                  <div><span class="text-slate-400">AUT:</span> <span class="text-amber-400 font-bold">${res.codigoAutorizacion || '100001'}</span></div>
+                  <div><span class="text-slate-400">AUT:</span> <span class="text-amber-400 font-bold">${res.codigoAutorizacion || '—'}</span></div>
                   <div><span class="text-slate-400">CLIENTE:</span> <span class="text-slate-200 font-bold truncate max-w-[90px] block">${res.titular || ATM_STATE.titular}</span></div>
                   <div><span class="text-slate-400">DE 39:</span> <span class="text-emerald-400 font-bold">00 APROBADA</span></div>
-                  <div><span class="text-slate-400">RRN:</span> <span class="text-slate-300">${res.rrn || '000000'}</span></div>
-                  <div><span class="text-slate-400">STAN:</span> <span class="text-slate-300">${res.stan || '000000'}</span></div>
+                  <div><span class="text-slate-400">RRN:</span> <span class="text-slate-300">${res.rrn || '—'}</span></div>
+                  <div><span class="text-slate-400">STAN:</span> <span class="text-slate-300">${res.stan || '—'}</span></div>
                 </div>
 
                 <!-- IMPORTE Y SALDO DESTACADOS -->
                 <div class="bg-gradient-to-r from-amber-950/60 to-slate-900/90 border border-amber-500/40 rounded-lg p-1.5 space-y-0.5">
-                  <div class="flex justify-between items-center text-[10px]">
-                    <span class="text-slate-300 font-semibold">RETIRADO:</span>
-                    <span class="text-emerald-400 font-black mono-num">Q. ${res.monto.toFixed(2)}</span>
-                  </div>
-                  <div class="border-t border-slate-700/50 pt-0.5 flex justify-between items-center text-[8.5px]">
-                    <span class="text-slate-400">SALDO DISP:</span>
-                    <span class="text-cyan-300 font-bold mono-num">Q. ${res.saldoDisponible.toFixed(2)}</span>
-                  </div>
+                  ${importeHtml}
                 </div>
               </div>
 
@@ -2554,8 +2566,14 @@
         }
         if (key === 'ENTER') {
           const val = parseFloat(ATM_STATE.enteredPin);
-          if (val > 0) {
+          if (val > 0 && val % 100 === 0) {
             ejecutarTransaccionIso('0200', '010000', val);
+          } else if (val > 0) {
+            mostrarModalAlerta({
+              titulo: "MONTO NO DISPENSABLE",
+              mensaje: "El cajero entrega billetes de Q. 100 y Q. 200: ingrese un múltiplo de Q. 100.",
+              tipo: "warning"
+            });
           } else {
             mostrarModalAlerta({
               titulo: "MONTO NO DISPONIBLE",
@@ -2831,6 +2849,7 @@
         monto = ultima.monto;
       }
 
+      ATM_STATE.mtiEnCurso = mti;
       ATM_STATE.currentScreen = 'PROCESSING';
       renderScreen();
 
@@ -3029,7 +3048,13 @@
       if (opEl) {
         if (data.mtiSolicitud === '0100') opEl.innerText = 'CONSULTA DE SALDO (0100)';
         else if (data.mtiSolicitud === '0420') opEl.innerText = 'REVERSA TRANSACCIÓN (0420)';
+        else if (data.mtiSolicitud === '0800') opEl.innerText = 'ECHO TEST DE RED (0800)';
         else opEl.innerText = 'RETIRO EFECTIVO (0200)';
+      }
+      const mtoLabelEl = document.getElementById('rcpt-monto-label');
+      if (mtoLabelEl) {
+        mtoLabelEl.innerText = data.mtiSolicitud === '0420' ? 'MONTO REVERSADO:'
+          : (data.mtiSolicitud === '0200' ? 'MONTO DISPENSADO:' : 'MONTO:');
       }
 
       const montoBox = document.getElementById('rcpt-monto-box');
@@ -3039,21 +3064,21 @@
 
       const mtoEl = document.getElementById('rcpt-monto');
       if (mtoEl) {
-        mtoEl.innerText = `Q. ${(data.monto || 0).toFixed(2)}`;
+        mtoEl.innerText = `Q. ${Number(data.monto || 0).toFixed(2)}`;
         if (info.recibo) mtoEl.className = `font-black text-sm font-mono ${info.recibo.montoTextColor}`;
       }
 
       const sldEl = document.getElementById('rcpt-saldo');
-      if (sldEl) sldEl.innerText = `Q. ${(data.saldoDisponible !== undefined ? data.saldoDisponible : 0).toFixed(2)}`;
+      if (sldEl) sldEl.innerText = `Q. ${Number(data.saldoDisponible || 0).toFixed(2)}`;
 
       const rrnEl = document.getElementById('rcpt-rrn');
-      if (rrnEl) rrnEl.innerText = data.rrn || '262700100001';
+      if (rrnEl) rrnEl.innerText = data.rrn || '—';
 
       const stanEl = document.getElementById('rcpt-stan');
-      if (stanEl) stanEl.innerText = data.stan || '100001';
+      if (stanEl) stanEl.innerText = data.stan || '—';
 
       const authEl = document.getElementById('rcpt-auth');
-      if (authEl) authEl.innerText = data.codigoAutorizacion || '100001';
+      if (authEl) authEl.innerText = data.codigoAutorizacion || '—';
 
       const de39El = document.getElementById('rcpt-de39');
       if (de39El) de39El.innerText = `${data.codigoRespuestaIso || '00'} - ${data.exitosa ? 'APROBADA' : 'RECHAZADA'}`;
@@ -3616,9 +3641,9 @@
     async function resetearCuentasCore() {
       const confirmado = await mostrarModalConfirmacion({
         titulo: "RESTAURACIÓN DE BASE DE DATOS",
-        mensaje: "¿Confirma que desea restaurar todas las cuentas bancarias a sus saldos iniciales y limpiar el historial de transacciones ISO 8583?",
+        mensaje: "¿Confirma que desea devolver las 5 cuentas de demostración a su saldo, estado y PIN iniciales y borrar el historial de transacciones? Las demás cuentas se conservan.",
         tipo: "warning",
-        textoConfirmar: "Restaurar Base de Datos",
+        textoConfirmar: "Restaurar datos",
         textoCancelar: "Cancelar"
       });
       if (!confirmado) return;
@@ -3628,7 +3653,7 @@
         cargarDatosAdmin();
         mostrarModalAlerta({
           titulo: "BASE DE DATOS RESTAURADA",
-          mensaje: "Base de datos de cuentas y métricas del Core Bancario restauradas exitosamente.",
+          mensaje: "Cuentas de demostración restauradas e historial de transacciones vaciado.",
           tipo: "success"
         });
       } catch (err) {
