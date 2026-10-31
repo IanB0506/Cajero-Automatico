@@ -22,6 +22,7 @@ Switch transaccional que recibe tramas **ISO 8583** por **TCP**, las traduce a u
 | `README.md` (este archivo) | Instalación con Docker, uso, arquitectura, cumplimiento de la guía, pruebas, carga y resultados |
 | [`COMPILACION.md`](COMPILACION.md) | **Instrucciones de compilación y prueba**: con Docker (nativo o JVM) y sin Docker (JDK 25 + Maven, nativo en Linux), configuración y problemas frecuentes |
 | [`PRUEBAS.md`](PRUEBAS.md) | **Guía de pruebas y de la defensa**: pruebas automatizadas, carga, cómo medir cada métrica y las tres demostraciones (simulador ISO en vivo, binario nativo, métricas de carga) |
+| [`COMANDOS_PRESENTACION.md`](COMANDOS_PRESENTACION.md) | Lista de comandos de la defensa en orden, cada uno con su título |
 | [`DOCUMENTACION.md`](DOCUMENTACION.md) | Reporte técnico: decisiones de diseño, formato de las tramas, Core Bancario, seguridad, metodología y mediciones |
 | `MANUAL_DE_USUARIO_RED_NEXUS.pdf` | Manual de usuario del cajero web y del panel de administración (con capturas) |
 | `MANUAL_TECNICO_RED_NEXUS_ISO8583.pdf` | Manual técnico: arquitectura, protocolo, base de datos, API REST, configuración, despliegue y operación |
