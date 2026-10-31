@@ -126,7 +126,10 @@ class LoadTestSimulationTest extends IntegracionBase {
                 String.join(", ", recolectores), pausasGcMs.size(), maxPausa, PAUSA_GC_MAXIMA_MS, eventosPinning.get(),
                 pinningRelevante.size());
         log.info("\n{}", reporte);
-        Files.writeString(Path.of("target", "reporte-carga.txt"), reporte);
+        // target/site es la carpeta "reportes" del proyecto cuando las pruebas corren con docker compose
+        Path archivoReporte = Path.of("target", "site", "reporte-carga-jfr.txt");
+        Files.createDirectories(archivoReporte.getParent());
+        Files.writeString(archivoReporte, reporte);
 
         assertEquals(total, carga.exitosas(), "Todas las transacciones concurrentes deben aprobarse");
         assertEquals(0, carga.fallidas(), "No debe haber fallos por timeout o socket");

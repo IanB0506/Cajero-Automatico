@@ -3,6 +3,8 @@
 #   docker compose up -d --build                    -> arrancar todo
 #   docker compose --profile tests run --rm --build tests   -> ejecutar las pruebas (+ cobertura)
 #   docker compose --profile carga run --rm jmeter  -> prueba de carga ISO 8583 con JMeter
+#   docker compose --profile demo run --rm simulador retiro   -> envía una trama ISO 8583 real por TCP
+#   docker compose --profile comparacion up -d --build app-jvm -> misma app sobre la JVM (comparar con el nativo)
 #
 # Imagen de la app (variable APP_DOCKERFILE del archivo .env):
 #   Dockerfile      -> binario nativo GraalVM 25 sobre Distroless (por defecto)
@@ -93,7 +95,8 @@ services:
       app:
         condition: service_healthy
     command:
-      - "-Jhost=app"
+      # CARGA_HOST=app-jvm dirige la carga a la versión JVM (perfil "comparacion")
+      - "-Jhost=${CARGA_HOST:-app}"
       - "-JtcpPort=15000"
       - "-JhttpPort=${APP_HTTP_PORT}"
       - "-JadminUser=${ADMIN_USER}"
@@ -104,6 +107,46 @@ services:
       - ./reportes:/reportes
       # El plan se lee de la carpeta del proyecto: los cambios al .jmx no requieren reconstruir la imagen
       - ./src/test/resources/load-test-iso8583.jmx:/plan/load-test-iso8583.jmx:ro
+
+  # Simulador de terminal ISO 8583 a pedido (perfil "demo"): arma la trama, la envía al socket TCP de la app
+  # y muestra la respuesta campo por campo. Usa la imagen de Maven con JDK 25 de la compilación (se descarga la
+  # primera vez si no está en el equipo).
+  simulador:
+    image: maven:3.9-eclipse-temurin-25
+    profiles: ["demo"]
+    depends_on:
+      app:
+        condition: service_healthy
+    volumes:
+      - ./simulador:/simulador:ro
+    entrypoint: ["java", "/simulador/SimuladorIso.java", "--host", "app", "--puerto", "15000"]
+    command: ["retiro"]
+
+  # La misma aplicación sobre la JVM (perfil "comparacion"), para comparar arranque y memoria con el binario
+  # nativo y medir las pausas de ZGC. Escucha en APP_JVM_HTTP_PORT (8088) y APP_JVM_TCP_PORT (15001).
+  app-jvm:
+    build:
+      context: .
+      dockerfile: Dockerfile.jvm
+    container_name: cajero-app-jvm
+    profiles: ["comparacion"]
+    depends_on:
+      db-init:
+        condition: service_completed_successfully
+    environment:
+      SPRING_DATASOURCE_URL: "jdbc:sqlserver://sqlserver:1433;databaseName=CoreBancario5B;encrypt=true;trustServerCertificate=true;sendStringParametersAsUnicode=false;"
+      SPRING_DATASOURCE_USERNAME: sa
+      SPRING_DATASOURCE_PASSWORD: ${MSSQL_SA_PASSWORD}
+      SERVER_PORT: ${APP_HTTP_PORT}
+      ADMIN_USER: ${ADMIN_USER}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      CORE_API_KEY: ${CORE_API_KEY}
+      TZ: ${TZ}
+      # Las opciones del Dockerfile.jvm más el registro de las fases de ZGC: docker compose logs app-jvm | findstr "Pause"
+      JAVA_OPTS: "-XX:+UseZGC -XX:MaxRAMPercentage=75 -Xlog:gc+phases=info"
+    ports:
+      - "${APP_JVM_HTTP_PORT:-8088}:${APP_HTTP_PORT}"
+      - "${APP_JVM_TCP_PORT:-15001}:15000"
 
 volumes:
   sqlserver-data:
