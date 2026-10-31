@@ -267,8 +267,9 @@ Otras propiedades de `application.yaml` (se pueden cambiar con variables de ento
 
 | Problema | Solución |
 |---|---|
-| La compilación nativa tarda más de 20 minutos, la PC se pone muy lenta o falla con `OutOfMemoryError` / `exit code 137` | Docker tiene poca memoria. Revisa en el log la línea `Build resources: X GB of memory`: si es menor que 6 GB, sigue los pasos de abajo o usa `Dockerfile.jvm` (sección 3.2) |
-| `[1/8] Initializing...` y luego nada durante minutos | Normal: está analizando el código. Espera a `[8/8] Creating image...` |
+| La compilación nativa tarda más de 20 minutos, la PC se pone muy lenta o falla con `OutOfMemoryError` / `exit code 137` | Docker tiene poca memoria. Revisa en el log la línea `Build resources: X GB of memory`: si es menor que 6 GB, compila con todo detenido y, si no alcanza, dale más memoria a Docker o compila en otra PC (pasos de abajo). También puedes usar `Dockerfile.jvm` (sección 3.2) |
+| `[1/8] Initializing...` y luego nada durante minutos | Normal: la etapa `[2/8] Performing analysis...` analiza todo el código y tarda varios minutos sin imprimir nada. Espera a `[8/8] Creating image...` y `Finished generating 'recolector'` |
+| Avisos `SLF4J(W): No SLF4J providers were found` o `Warning: ... experimental` durante la compilación nativa | Normales: los emite la herramienta de compilación, no la aplicación |
 | `error during connect` o `docker daemon is not running` | Abre Docker Desktop y espera a que el indicador esté en verde |
 | `port is already allocated` | Otro programa usa ese puerto: cámbialo en `.env` (`APP_HTTP_PORT`, `APP_TCP_PORT`, `SQLSERVER_PORT`) |
 | `cajero-db-init` termina con error | `docker compose logs db-init`. Si cambiaste `MSSQL_SA_PASSWORD` después del primer arranque: `docker compose down -v` |
@@ -276,14 +277,38 @@ Otras propiedades de `application.yaml` (se pueden cambiar con variables de ento
 | `mvn verify` falla con `Coverage checks have not been met` | La cobertura de líneas bajó del 80 %: agrega pruebas para el código nuevo |
 | `mvn` dice `release version 25 not supported` | El `JAVA_HOME` apunta a un JDK anterior: instala el JDK 25 y verifica con `java -version` |
 
+**Compilar con todo detenido** (recomendado si `Build resources` es menor que 6 GB). Durante `docker compose up -d --build` siguen corriendo SQL Server y la versión anterior de la app, que ocupan 1 – 2 GB:
+
+```cmd
+docker compose down
+docker compose build app
+docker compose up -d
+```
+
+Mientras compila, cierra los programas pesados (navegador con muchas pestañas, IDE).
+
 **Dar más memoria a Docker Desktop en Windows (WSL 2):**
 
 1. Cancela con `Ctrl+C` y ejecuta `docker compose down`.
-2. `notepad "%UserProfile%\.wslconfig"` y escribe (deja al menos 4 GB para Windows):
+2. Revisa la RAM de la PC en *Administrador de tareas → Rendimiento → Memoria*.
+3. `notepad "%UserProfile%\.wslconfig"` y escribe (deja al menos 4 GB para Windows: con 12 GB de RAM, `8GB`; con 16 GB, hasta `12GB`):
    ```
    [wsl2]
    memory=8GB
    ```
-3. `wsl --shutdown`, vuelve a abrir Docker Desktop y ejecuta otra vez `docker compose up -d --build`.
+4. `wsl --shutdown`, vuelve a abrir Docker Desktop y compila con todo detenido (arriba).
 
-Con el backend Hyper-V la memoria se ajusta en Docker Desktop → *Settings* → *Resources*.
+Con el backend Hyper-V la memoria se ajusta en Docker Desktop → *Settings* → *Resources*. Con 8 GB de RAM en la PC la compilación nativa no es fiable: usa la versión JVM o compila en otra PC.
+
+**Compilar en otra PC y llevar la imagen.** La imagen nativa se puede compilar en una PC con más memoria y copiar como archivo (≈ 340 MB). En la PC que compiló:
+
+```cmd
+docker save cajero-automatico-app:latest -o app-nativa.tar
+```
+
+En la otra PC, con `APP_DOCKERFILE=Dockerfile` en `.env`, carga la imagen y levanta **sin** `--build` (para que no vuelva a compilar):
+
+```cmd
+docker load -i app-nativa.tar
+docker compose up -d
+```

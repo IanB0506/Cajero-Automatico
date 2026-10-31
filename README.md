@@ -76,6 +76,8 @@ La primera vez se suman las descargas (SQL Server, dependencias de Maven): con l
 
 Con el backend Hyper-V la memoria se ajusta en Docker Desktop → *Settings* → *Resources*. La imagen nativa queda en caché: solo la primera compilación es pesada.
 
+Con poca memoria, compila con todo detenido: `docker compose down`, `docker compose build app` y luego `docker compose up -d` (durante `up --build` siguen corriendo SQL Server y la app anterior, que ocupan 1-2 GB). También se puede compilar en otra PC y llevar la imagen con `docker save` / `docker load`: ver [COMPILACION.md](COMPILACION.md#9-problemas-frecuentes-de-compilación).
+
 `docker compose` levanta, en orden:
 
 | Contenedor | Función | Puerto en Windows |
