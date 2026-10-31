@@ -12,6 +12,7 @@ import com.banco.recolector.corebancario.repository.TransaccionRepository;
 import com.banco.recolector.iso.PinBlock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -72,16 +73,19 @@ public class CoreBancarioService {
     private final CuentaRepository cuentaRepository;
     private final TransaccionRepository transaccionRepository;
     private final TransactionTemplate transactionTemplate;
+    private final ApplicationEventPublisher eventos;
 
     private final AtomicLong secuenciaAutorizacion = new AtomicLong(-1);
     private final ReentrantLock lockSecuencia = new ReentrantLock();
 
     public CoreBancarioService(CuentaRepository cuentaRepository,
                                TransaccionRepository transaccionRepository,
-                               PlatformTransactionManager transactionManager) {
+                               PlatformTransactionManager transactionManager,
+                               ApplicationEventPublisher eventos) {
         this.cuentaRepository = cuentaRepository;
         this.transaccionRepository = transaccionRepository;
         this.transactionTemplate = new TransactionTemplate(transactionManager);
+        this.eventos = eventos;
     }
 
     // =====================================================================================
@@ -471,6 +475,8 @@ public class CoreBancarioService {
         for (CuentaSemilla semilla : SEMILLAS) {
             restaurarSemilla(semilla);
         }
+        // El historial quedó vacío: las respuestas que el Recolector tenga guardadas ya no corresponden a nada
+        eventos.publishEvent(new DatosRestauradosEvent());
         log.info("Reset completado: transacciones vaciadas, acumulados reiniciados y cuentas semilla restauradas.");
     }
 

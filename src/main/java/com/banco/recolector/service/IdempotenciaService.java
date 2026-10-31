@@ -1,11 +1,13 @@
 package com.banco.recolector.service;
 
+import com.banco.recolector.corebancario.service.DatosRestauradosEvent;
 import jakarta.inject.Inject;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.event.TransactionalEventListener;
 
 import java.time.Clock;
 import java.time.Duration;
@@ -103,6 +105,16 @@ public class IdempotenciaService {
      */
     public void limpiar() {
         cache.clear();
+    }
+
+    /**
+     * Al restaurar los datos del Core (después del commit) se vacía la caché: si no, repetir una trama ya
+     * respondida devolvería la aprobación guardada sin llegar al Core, que ya no tiene esa transacción.
+     */
+    @TransactionalEventListener(fallbackExecution = true)
+    public void alRestaurarDatos(DatosRestauradosEvent evento) {
+        limpiar();
+        log.info("Caché de idempotencia vaciada al restaurar los datos del Core.");
     }
 
     public int totalRegistros() {

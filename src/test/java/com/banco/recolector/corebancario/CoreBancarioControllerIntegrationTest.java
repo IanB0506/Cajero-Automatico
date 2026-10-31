@@ -4,8 +4,10 @@ import com.banco.recolector.IntegracionBase;
 import com.banco.recolector.corebancario.entity.CuentaEntity;
 import com.banco.recolector.corebancario.service.PinHasher;
 import com.banco.recolector.iso.PinBlock;
+import com.banco.recolector.service.IdempotenciaService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
 import tools.jackson.databind.JsonNode;
 
 import java.math.BigDecimal;
@@ -17,6 +19,9 @@ import static org.springframework.http.HttpMethod.*;
 
 @DisplayName("API REST del Core Bancario: seguridad, validaciones y mapeo HTTP")
 class CoreBancarioControllerIntegrationTest extends IntegracionBase {
+
+    @Autowired
+    private IdempotenciaService idempotencia;
 
     private Map<String, Object> transaccion(CuentaEntity c, String tipo, String monto, String pin) {
         Map<String, Object> cuerpo = new LinkedHashMap<>(Map.of("rrn", nuevoRrn(), "stan", nuevoStan(), "pan", c.getPan(),
@@ -150,9 +155,10 @@ class CoreBancarioControllerIntegrationTest extends IntegracionBase {
     }
 
     @Test
-    @DisplayName("Reset (solo administrador): restaura saldo, estado y PIN de las cuentas semilla y recrea las borradas")
+    @DisplayName("Reset (solo administrador): restaura las cuentas semilla, recrea las borradas y vacía la caché de idempotencia")
     void testReset() {
         assertEquals(401, llamar(POST, "/api/core/reset", null).status());
+        idempotencia.registrar("RESET0000001", "000001", new byte[] {0});
 
         String pedro = "/api/core/cuentas/1001-2002-3005";
         assertEquals(200, comoAdmin(PUT, pedro, Map.of("saldoDisponible", 999, "estado", "BLOCKED", "pin", "8888")).status());
@@ -175,6 +181,7 @@ class CoreBancarioControllerIntegrationTest extends IntegracionBase {
         assertEquals(new BigDecimal("350.00"), recreada.getSaldoDisponible());
         assertEquals(PinHasher.hash("1001-2002-3002", "4321"), recreada.getPinHash());
         assertEquals(0, transaccionRepository.count());
+        assertNull(idempotencia.obtener("RESET0000001", "000001"), "Una trama ya respondida vuelve a llegar al Core");
     }
 
     @Test

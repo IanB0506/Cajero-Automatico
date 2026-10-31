@@ -275,7 +275,7 @@ class CoreBancarioServiceIntegrationTest extends IntegracionBase {
     void testAutorizacionNoSeRepiteTrasReinicio() {
         CuentaEntity c = crearCuenta("100.00", "500.00", "1234");
         String antes = core.procesar(req(c, COMPRA, "1.00", null)).codigoAutorizacion();
-        CoreBancarioService reiniciado = new CoreBancarioService(cuentaRepository, transaccionRepository, transactionManager);
+        CoreBancarioService reiniciado = new CoreBancarioService(cuentaRepository, transaccionRepository, transactionManager, evento -> {});
         String despues = reiniciado.procesar(req(c, COMPRA, "1.00", null)).codigoAutorizacion();
         assertTrue(Integer.parseInt(despues) > Integer.parseInt(antes), antes + " -> " + despues);
     }
