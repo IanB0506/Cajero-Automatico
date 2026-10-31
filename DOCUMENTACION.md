@@ -237,7 +237,7 @@ Con 4 vCPU repartidas entre la app, SQL Server y JMeter la CPU queda saturada en
 
 ### 6.5 Cobertura
 
-JaCoCo sobre la suite completa (119 pruebas, 0 fallos): **96,7 % de líneas**, **84,5 % de ramas**, 97,0 % de instrucciones y 99,6 % de métodos. `mvn verify` falla si la cobertura de líneas baja de 80 % (`jacoco:check`).
+JaCoCo sobre la suite completa (119 pruebas, 0 fallos): **96,8 % de líneas**, **84,5 % de ramas**, 97,0 % de instrucciones y 99,6 % de métodos. `mvn verify` falla si la cobertura de líneas baja de 80 % (`jacoco:check`).
 
 ---
 

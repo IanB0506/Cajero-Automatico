@@ -361,7 +361,8 @@ CREATE TABLE dbo.transacciones (
       diario si era retiro) una sola vez; si no existe responde 25.</li>
     <li><strong>Autorización:</strong> códigos secuenciales de 6 dígitos.</li>
     <li><strong>Reset de demostración</strong> (<code>POST /api/core/reset</code>): borra las transacciones, reinicia acumulados e
-      intentos de todas las cuentas y devuelve las cinco cuentas semilla a su saldo, límite, estado y PIN iniciales.</li>
+      intentos de todas las cuentas y devuelve las cinco cuentas semilla a su saldo, límite, estado y PIN iniciales. Al confirmar
+      publica el evento <code>DatosRestauradosEvent</code>, con el que el Recolector vacía su caché de idempotencia.</li>
   </ol>
 </section>
 
@@ -502,6 +503,8 @@ docker compose ps                                 # cajero-app debe quedar "heal
 docker compose logs -f app                        # registros (incluye el tiempo de arranque)
 docker compose --profile tests run --rm --build tests     # pruebas + cobertura en reportes/jacoco
 docker compose --profile carga run --rm jmeter    # prueba de carga, reporte en reportes/jmeter/html
+docker compose --profile demo run --rm simulador retiro   # trama ISO 8583 real por TCP
+docker compose --profile comparacion up -d --build app-jvm   # la misma app sobre la JVM
 docker compose down                               # detener (conserva datos)
 docker compose down -v                            # detener y borrar la base de datos</pre>
   <table>
@@ -512,6 +515,8 @@ docker compose down -v                            # detener y borrar la base de 
       <tr><td><code>app</code></td><td>construida con <code>Dockerfile</code> o <code>Dockerfile.jvm</code></td><td>Aplicación; arranca cuando <code>db-init</code> terminó bien</td></tr>
       <tr><td><code>tests</code> (perfil)</td><td>etapa <code>test</code> del Dockerfile</td><td><code>mvn verify</code> sobre H2</td></tr>
       <tr><td><code>jmeter</code> (perfil)</td><td><code>Dockerfile.jmeter</code></td><td>JMeter 5.6.3 sobre Java 21</td></tr>
+      <tr><td><code>simulador</code> (perfil <code>demo</code>)</td><td>maven:3.9-eclipse-temurin-25</td><td>Ejecuta <code>simulador/SimuladorIso.java</code>: terminal ISO 8583 por TCP</td></tr>
+      <tr><td><code>app-jvm</code> (perfil <code>comparacion</code>)</td><td><code>Dockerfile.jvm</code></td><td>La misma aplicación sobre la JVM con ZGC (puertos 8088 y 15001) y registro de las pausas de GC</td></tr>
     </tbody>
   </table>
 
@@ -559,14 +564,14 @@ mvn -Pnative -DskipTests package           # binario nativo target/recolector (G
   </ul>
   <h3>Datos de demostración</h3>
   <p><code>POST /api/core/reset</code> (o <strong>Restaurar datos</strong> en el panel) devuelve las cuentas semilla a su estado
-    inicial. <code>docker compose down -v</code> borra la base completa; el siguiente <code>up</code> la recrea.</p>
+    inicial y vacía la caché de idempotencia del Recolector. <code>docker compose down -v</code> borra la base completa; el siguiente <code>up</code> la recrea.</p>
 </section>
 
 <!-- ============================================================ 10 -->
 <section class="capitulo">
   <h2>10. Pruebas y calidad</h2>
   <p>119 pruebas (JUnit 6, AssertJ, Mockito, MockMvc, WireMock 3) se ejecutan con <code>mvn verify</code> sobre H2 en modo
-    MSSQL. JaCoCo falla el build si la cobertura de líneas baja de 80 %; la última ejecución dio 96,7 % de líneas y 84,5 % de ramas.</p>
+    MSSQL. JaCoCo falla el build si la cobertura de líneas baja de 80 %; la última ejecución dio 96,8 % de líneas y 84,5 % de ramas.</p>
   <table>
     <thead><tr><th>Clase</th><th>Alcance</th></tr></thead>
     <tbody>
@@ -577,7 +582,7 @@ mvn -Pnative -DskipTests package           # binario nativo target/recolector (G
       <tr><td><code>CoreBancarioServiceIntegrationTest</code></td><td>Reglas de negocio y concurrencia real</td></tr>
       <tr><td><code>CoreBancarioControllerIntegrationTest</code>, <code>IsoSimuladorControllerIntegrationTest</code></td><td>API, seguridad, validaciones, reset</td></tr>
       <tr><td><code>RecolectorEndToEndTest</code></td><td>Socket TCP → Recolector → Core → BD</td></tr>
-      <tr><td><code>LoadTestSimulationTest</code></td><td>Carga por TCP con JFR: pausas de ZGC ≤ 1 ms y sin pinning</td></tr>
+      <tr><td><code>LoadTestSimulationTest</code></td><td>Carga por TCP con JFR: pausas de ZGC ≤ 1 ms y sin pinning (reporte en <code>target/site/reporte-carga-jfr.txt</code>; con Docker, <code>reportes/reporte-carga-jfr.txt</code>)</td></tr>
       <tr><td><code>IsoAotRuntimeHintsTest</code></td><td>RuntimeHints de la imagen nativa</td></tr>
     </tbody>
   </table>
@@ -585,7 +590,8 @@ mvn -Pnative -DskipTests package           # binario nativo target/recolector (G
   <p><code>src/test/resources/load-test-iso8583.jmx</code> crea una cuenta por terminal, envía retiros 0200 con PIN block
     por conexiones TCP persistentes verificando 0210 con DE 39 = 00, y al terminar borra esas cuentas. Se ejecuta con
     <code>docker compose --profile carga run --rm jmeter</code> o con un JMeter local sobre Java 17/21. Los resultados
-    medidos y su metodología están en <code>DOCUMENTACION.md</code>.</p>
+    medidos y su metodología están en <code>DOCUMENTACION.md</code>; cómo ejecutar cada prueba y leer sus métricas, en
+    <code>PRUEBAS.md</code>, y cómo compilar con y sin Docker, en <code>COMPILACION.md</code>.</p>
 </section>
 
 <!-- ============================================================ 11 -->

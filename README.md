@@ -20,6 +20,8 @@ Switch transaccional que recibe tramas **ISO 8583** por **TCP**, las traduce a u
 | Documento | Contenido |
 |---|---|
 | `README.md` (este archivo) | Instalación con Docker, uso, arquitectura, cumplimiento de la guía, pruebas, carga y resultados |
+| [`COMPILACION.md`](COMPILACION.md) | **Instrucciones de compilación y prueba**: con Docker (nativo o JVM) y sin Docker (JDK 25 + Maven, nativo en Linux), configuración y problemas frecuentes |
+| [`PRUEBAS.md`](PRUEBAS.md) | **Guía de pruebas y de la defensa**: pruebas automatizadas, carga, cómo medir cada métrica y las tres demostraciones (simulador ISO en vivo, binario nativo, métricas de carga) |
 | [`DOCUMENTACION.md`](DOCUMENTACION.md) | Reporte técnico: decisiones de diseño, formato de las tramas, Core Bancario, seguridad, metodología y mediciones |
 | `MANUAL_DE_USUARIO_RED_NEXUS.pdf` | Manual de usuario del cajero web y del panel de administración (con capturas) |
 | `MANUAL_TECNICO_RED_NEXUS_ISO8583.pdf` | Manual técnico: arquitectura, protocolo, base de datos, API REST, configuración, despliegue y operación |
@@ -53,9 +55,14 @@ cd Cajero-Automatico
 docker compose up -d --build
 ```
 
-La primera vez tarda unos **10-15 minutos**: descarga SQL Server, las dependencias de Maven y compila el **binario nativo** (la compilación nativa sola tarda 5-10 minutos y usa mucha memoria; asigna al menos **8 GB** a Docker Desktop / WSL 2). Las siguientes veces solo se recompila lo que cambió.
+**Qué versión se compila:** la elige `APP_DOCKERFILE` en el archivo `.env` (revísalo con `notepad .env` antes de compilar):
 
-> **¿Poca memoria o prisa?** En `.env` cambia `APP_DOCKERFILE=Dockerfile` por `APP_DOCKERFILE=Dockerfile.jvm` y vuelve a ejecutar `docker compose up -d --build`. Se construye la versión JVM (Temurin 25 + ZGC) en ~2 minutos. Todo lo demás funciona igual.
+| `APP_DOCKERFILE` | Versión de la app | Compilación de la app |
+|---|---|---|
+| `Dockerfile` | **Binario nativo** GraalVM 25 sobre Distroless: la que pide el enunciado y la que se inspecciona en la defensa | 5-10 minutos y mucha memoria: asigna al menos **8 GB** a Docker Desktop / WSL 2 |
+| `Dockerfile.jvm` | JAR sobre Temurin 25 con Generational ZGC | ~2 minutos, con poca memoria |
+
+La primera vez se suman las descargas (SQL Server, dependencias de Maven): con la versión nativa son unos **10-15 minutos** en total. Si cambias el valor, ejecuta otra vez `docker compose up -d --build`. Todo lo demás funciona igual con las dos versiones, y las siguientes compilaciones solo rehacen lo que cambió.
 
 **Compilación nativa en Windows: memoria de Docker.** Durante la compilación nativa el log muestra `[1/8] Initializing...` y `Build resources: X GB of memory`, y luego puede pasar varios minutos sin imprimir nada: no está congelada, está analizando el código y usa todos los procesadores (la PC se pone lenta mientras tanto). Si `Build resources` indica **menos de 6 GB**, la compilación puede tardar más de 20 minutos o fallar por falta de memoria. Para darle más memoria a Docker Desktop (backend WSL 2):
 
@@ -75,7 +82,7 @@ Con el backend Hyper-V la memoria se ajusta en Docker Desktop → *Settings* →
 |---|---|---|
 | `cajero-sqlserver` | SQL Server 2022 (datos en el volumen `sqlserver-data`) | `localhost,14333` |
 | `cajero-db-init` | Crea `CoreBancario5B` y ejecuta `init_sqlserver.sql` (idempotente); termina con `Exited (0)` | — |
-| `cajero-app` | Recolector ISO 8583 + Core Bancario + cajero web (binario nativo en Distroless) | `8087` (HTTP) y `15000` (TCP) |
+| `cajero-app` | Recolector ISO 8583 + Core Bancario + cajero web (binario nativo en Distroless o JVM, según `APP_DOCKERFILE`) | `8087` (HTTP) y `15000` (TCP) |
 
 Cuando `docker compose ps` muestre `cajero-app` como **healthy**, abre **http://localhost:8087**.
 
@@ -87,17 +94,20 @@ Cuando `docker compose ps` muestre `cajero-app` como **healthy**, abre **http://
 | Recompilar después de cambiar el código | `docker compose up -d --build` |
 | Pruebas automatizadas + cobertura | `docker compose --profile tests run --rm --build tests` |
 | Prueba de carga JMeter | `docker compose --profile carga run --rm jmeter` |
+| Enviar una trama ISO 8583 real por TCP (simulador) | `docker compose --profile demo run --rm simulador retiro --monto 100` |
+| Levantar también la versión JVM (comparar con el nativo) | `docker compose --profile comparacion up -d --build app-jvm` |
 
 Contraseñas, credenciales, puertos y zona horaria están en **`.env`**:
 
 | Variable | Valor por defecto | Uso |
 |---|---|---|
-| `APP_DOCKERFILE` | `Dockerfile` | `Dockerfile` (nativo) o `Dockerfile.jvm` |
+| `APP_DOCKERFILE` | `Dockerfile` o `Dockerfile.jvm` | Versión que se compila: nativa o JVM (ver arriba) |
 | `ADMIN_USER` / `ADMIN_PASSWORD` | `admin` / `Nexus2026_Admin` | Login de administración (web y API, HTTP Basic) |
 | `CORE_API_KEY` | `nexus-core-api-key-desarrollo` | Cabecera `X-API-Key` del Recolector hacia el Core |
 | `MSSQL_SA_PASSWORD` | `Nexus2026_Pass` | Usuario `sa` de SQL Server (fijada al crear el volumen) |
 | `APP_HTTP_PORT` / `APP_TCP_PORT` / `SQLSERVER_PORT` | `8087` / `15000` / `14333` | Puertos publicados en Windows |
-| `CARGA_TERMINALES` / `CARGA_DURACION` | `200` / `60` | Prueba de carga JMeter |
+| `CARGA_TERMINALES` / `CARGA_DURACION` / `CARGA_HOST` | `200` / `60` / `app` | Prueba de carga JMeter (`CARGA_HOST=app-jvm` la dirige a la versión JVM) |
+| `APP_JVM_HTTP_PORT` / `APP_JVM_TCP_PORT` | `8088` / `15001` | Puertos de la versión JVM (perfil `comparacion`) |
 
 Si cambias `MSSQL_SA_PASSWORD` después del primer arranque, ejecuta `docker compose down -v` para recrear la BD.
 
@@ -119,7 +129,7 @@ Ejecutar en **Símbolo del sistema (CMD)**, dentro de la carpeta del proyecto. E
 | 10 | Reporte de cobertura | `start reportes\jacoco\index.html` | Cobertura de líneas mayor que 80 % |
 | 11 | Postman | Importar `postman_collection.json` → *Run collection* | 30 peticiones y 46 pruebas en verde |
 | 12 | Prueba de carga (unos 2 min) | `docker compose --profile carga run --rm jmeter` | `Err: 0 (0.00%)` en la última línea `summary =` |
-| 13 | Reporte de carga | `start reportes\jmeter\html\index.html` | TPS en la columna *Throughput* de la fila **0200 Retiro ISO 8583** (la línea `summary =` incluye el alta y la baja de cuentas y da un valor menor) |
+| 13 | Reporte de carga | `start reportes\jmeter\html\index.html` | TPS en la columna *Transactions/s* (grupo *Throughput*) de la fila **0200 Retiro ISO 8583** (la línea `summary =` incluye el alta y la baja de cuentas y da un valor menor) |
 | 14 | Interfaz web | Abrir http://localhost:8087 | Retiro con el PIN de la cuenta → aprobado; PIN incorrecto → 55 |
 
 Comando del paso 4 (una sola línea):
@@ -179,13 +189,24 @@ Importa `postman_collection.json` (variables `baseUrl`, `adminUser`, `adminPassw
 
 Cada trama va precedida por **2 bytes con su longitud** (big-endian, sin signo); la respuesta usa el mismo enmarcado sobre la misma conexión, que puede quedar abierta (keep-alive). Formato ASCII con bitmap hexadecimal y cabecera opcional `ISO015000050`. Detalle de los campos en [DOCUMENTACION.md](DOCUMENTACION.md#3-formato-de-las-tramas).
 
+**Simulador de terminal** (`simulador/SimuladorIso.java`, Java sin dependencias): arma la trama (retiro 0200, consulta 0100, reversa 0420 o echo 0800, con PIN block en el DE 52), la envía al socket y muestra la respuesta campo por campo.
+
+```cmd
+docker compose --profile demo run --rm simulador retiro --monto 100 --rrn 100000000001
+docker compose --profile demo run --rm simulador retiro --monto 100 --rrn 100000000001 --repetir 2
+docker compose --profile demo run --rm simulador reversa --monto 100 --rrn 100000000001
+docker compose --profile demo run --rm simulador consulta --cuenta 1001-2002-3002 --pin 4321
+```
+
+Repetir el mismo RRN es una retransmisión (misma autorización, un solo débito). Con JDK 25 instalado también corre sin Docker: `java simulador\SimuladorIso.java --ayuda`. Guion completo con los resultados esperados en [PRUEBAS.md](PRUEBAS.md#b1-ejecución-transaccional-en-vivo-simulador-iso--recolector--core-bancario).
+
 ---
 
 ## 3. Arquitectura
 
 ```mermaid
 flowchart LR
-    T["Terminales ATM/POS<br/>(JMeter, cajero web, pruebas)"] -- "TCP :15000<br/>prefijo 2 bytes" --> GW
+    T["Terminales ATM/POS<br/>(simulador ISO, JMeter, pruebas)"] -- "TCP :15000<br/>prefijo 2 bytes" --> GW
     subgraph APP["Recolector (Spring Boot 4.1 · Java 25 · nativo GraalVM)"]
         GW["Spring Integration IP<br/>TcpNetServerConnectionFactory<br/>1 Virtual Thread por conexión"] --> REC["RecolectorTransaccionalService<br/>j8583: parseo DE 3/4/11/37/102/52"]
         REC --> IDEM["IdempotenciaService<br/>caché RRN+STAN"]
@@ -234,7 +255,7 @@ Flujo de un retiro (0200):
 docker compose --profile tests run --rm --build tests
 ```
 
-Ejecuta `mvn verify` sobre H2 en memoria (modo MSSQL) en un contenedor y deja el reporte de cobertura en **`reportes/jacoco/index.html`**. Con JDK 25 y Maven instalados también se puede correr `mvn verify` directamente.
+Ejecuta `mvn verify` sobre H2 en memoria (modo MSSQL) en un contenedor y deja el reporte de cobertura en **`reportes/jacoco/index.html`** y el de la prueba de carga con JFR (pausas de ZGC y pinning) en **`reportes/reporte-carga-jfr.txt`**. Con JDK 25 y Maven instalados también se puede correr `mvn verify` directamente.
 
 | Clase de prueba | Qué valida |
 |---|---|
@@ -257,7 +278,7 @@ docker compose up -d                                   # la app debe estar arrib
 docker compose --profile carga run --rm jmeter         # 200 terminales durante 60 s
 ```
 
-El reporte HTML queda en **`reportes/jmeter/html/index.html`**; el TPS es la columna **Throughput**. Terminales y duración se ajustan en `.env` (`CARGA_TERMINALES`, `CARGA_DURACION`).
+El reporte HTML queda en **`reportes/jmeter/html/index.html`**; el TPS es la columna **Transactions/s** (grupo *Throughput*) de la fila **0200 Retiro ISO 8583**. Terminales y duración se ajustan en `.env` (`CARGA_TERMINALES`, `CARGA_DURACION`); `CARGA_HOST=app-jvm` dirige la carga a la versión JVM. Cómo leer cada métrica: [PRUEBAS.md](PRUEBAS.md#b3-explicación-de-las-métricas-de-la-prueba-de-carga).
 
 Qué hace el plan (`src/test/resources/load-test-iso8583.jmx`):
 
@@ -291,7 +312,7 @@ Medidos en el entorno de desarrollo de esta entrega: **4 vCPU compartidas**, don
 | Latencia p95 / p99 | 335 / 459 ms | 309 / 419 ms | — |
 | Pausas de GC | Serial GC (CE) | **ZGC: máx. 0,90 ms, p99 0,19 ms, media 0,04 ms** (120 pausas) | ≤ 1 ms |
 | Pinning de Virtual Threads | — | **0 eventos** atribuibles al código (JFR) | 0 |
-| Cobertura (JaCoCo, 119 pruebas) | — | **96,7 % líneas · 84,5 % ramas** | > 80 % |
+| Cobertura (JaCoCo, 119 pruebas) | — | **96,8 % líneas · 84,5 % ramas** | > 80 % |
 
 **Lectura honesta de los resultados:**
 
@@ -303,7 +324,7 @@ Medidos en el entorno de desarrollo de esta entrega: **4 vCPU compartidas**, don
 
 ## 8. Ejecución sin Docker (desarrollo)
 
-Requisitos: **JDK 25** (Temurin o GraalVM), Maven 3.9 y SQL Server accesible.
+Requisitos: **JDK 25** (Temurin o GraalVM), Maven 3.9 y SQL Server accesible. Paso a paso completo en [COMPILACION.md](COMPILACION.md#6-camino-b-compilar-y-probar-sin-docker).
 
 1. Crear la BD y los datos: ejecutar `init_sqlserver.sql` sobre una BD `CoreBancario5B` (es idempotente: crea lo que falta sin borrar datos).
 2. La conexión por defecto (`src/main/resources/application.yaml`) es `127.0.0.1:1434`, usuario `sa`, contraseña `admin`; cámbiala ahí o con las variables de entorno `SPRING_DATASOURCE_URL`, `SPRING_DATASOURCE_USERNAME` y `SPRING_DATASOURCE_PASSWORD`. La app queda en el puerto `8087` (HTTP) y `15000` (TCP).
@@ -312,26 +333,28 @@ Requisitos: **JDK 25** (Temurin o GraalVM), Maven 3.9 y SQL Server accesible.
 ```powershell
 mvn spring-boot:run                     # JVM
 mvn verify                              # pruebas + verificación de cobertura (H2, no requiere SQL Server)
-mvn -Pnative -DskipTests package        # binario nativo (GraalVM 25; en Windows además Visual Studio Build Tools)
-target\recolector.exe                   # (Windows) o ./target/recolector en Linux
+```
+
+Binario nativo sin Docker: **solo en Linux**, con GraalVM 25, `gcc` y `zlib` (el perfil usa `--static-nolibc`, que solo existe en Linux). En Windows se compila con Docker (`docker compose build app`).
+
+```bash
+mvn -Pnative -DskipTests package        # genera target/recolector
+./target/recolector
 ```
 
 ---
 
 ## 9. Guía para la defensa
 
-Demostración sugerida (15 minutos):
+El enunciado pide tres demostraciones. El paso a paso, con los comandos y los resultados esperados, está en [PRUEBAS.md](PRUEBAS.md#parte-b-demostraciones-de-la-defensa):
 
-1. **Arquitectura (3 min):** diagrama de la sección 3; Virtual Threads por conexión TCP, Spring Integration IP, RestClient con `RetryTemplate`, idempotencia en dos niveles.
-2. **Demo en vivo (4 min):**
-   - `docker compose ps` → `cajero-app` *healthy* (HEALTHCHECK del propio binario: Distroless no tiene shell ni curl).
-   - `docker compose logs app | findstr Started` → tiempo de arranque del binario nativo.
-   - Cajero web: retiro con PIN correcto → 00; PIN incorrecto → 55; reversa del retiro → 0430 y saldo restaurado.
-   - Consola ISO 8583 (panel de administración): tramas enviada y recibida, bitmap y DE 39 de una transacción.
-   - Postman Runner: 30 peticiones en verde (incluye retransmisión idempotente y 401 sin credenciales).
-3. **Nativo y Distroless (3 min):** `Dockerfile` multi-etapa; `IsoAotRuntimeHints`; `docker images` (tamaño); `docker exec cajero-app sh` falla porque no existe shell (superficie de ataque mínima); usuario `nonroot`.
-4. **Pruebas y métricas (4 min):** `docker compose --profile tests run --rm --build tests` → reporte JaCoCo; `docker compose --profile carga run --rm jmeter` → reporte HTML; tabla de la sección 7 y explicación de la metodología y límites del equipo.
-5. **Cierre (1 min).**
+| Demostración | Cómo se hace en este proyecto |
+|---|---|
+| **Ejecución transaccional en vivo** (Simulador ISO → Recolector → Core Bancario) | `docker compose --profile demo run --rm simulador ...` envía tramas reales por el socket TCP: retiro aprobado (00), retransmisión con el mismo RRN (un solo débito), reversa 0430, PIN incorrecto (55) y consulta 0110. El efecto se ve en `GET /api/core/cuentas/{id}/transacciones` y en los logs |
+| **Inspección del binario nativo, arranque y RAM** | `docker history` y `docker image inspect` (binario de ≈ 226 MB, usuario 65532), `docker exec cajero-app sh` falla (sin shell ni JVM), `docker compose restart app` + `findstr "Started"`, `docker stats`; comparación con la misma app sobre la JVM (perfil `comparacion`) |
+| **Métricas de la prueba de carga** | Reporte de JMeter (TPS, % de error, p95/p99) y `reportes/reporte-carga-jfr.txt` (pausas de ZGC y pinning); pausas de ZGC en vivo con `docker compose logs app-jvm \| findstr "Pause"` |
+
+Orden sugerido (15 minutos): arquitectura (3 min, diagrama de la sección 3) → transacciones en vivo (4 min) → binario nativo (3 min) → pruebas y métricas (4 min) → cierre (1 min). Qué preparar el día anterior y 30 minutos antes: [PRUEBAS.md](PRUEBAS.md#parte-c-lista-para-el-día-de-la-defensa).
 
 Preguntas probables y dónde está la respuesta: idempotencia ante duplicados simultáneos (`CoreBancarioService#procesar`), por qué no hay pinning (sin `synchronized` en rutas de E/S, `ReentrantLock`; `LoadTestSimulationTest`), mapeo HTTP → DE 39 (`CoreBancarioClient#codigoPorEstadoHttp`), formato del PIN block (`PinBlock`).
 
@@ -340,17 +363,20 @@ Preguntas probables y dónde está la respuesta: idempotencia ante duplicados si
 ## 10. Estructura del repositorio
 
 ```
-├── Dockerfile               # Nativo: GraalVM 25 -> Distroless (por defecto)
-├── Dockerfile.jvm           # Alternativa JVM: Temurin 25 + ZGC
+├── Dockerfile               # Nativo: GraalVM 25 -> Distroless (APP_DOCKERFILE=Dockerfile)
+├── Dockerfile.jvm           # JVM: Temurin 25 + ZGC (APP_DOCKERFILE=Dockerfile.jvm)
 ├── Dockerfile.jmeter        # JMeter 5.6.3 (Java 21) para la prueba de carga
-├── docker-compose.yml       # sqlserver, db-init, app, tests (perfil), jmeter (perfil)
+├── docker-compose.yml       # sqlserver, db-init, app y, por perfil: tests, jmeter, simulador, app-jvm
 ├── .env                     # Puertos, credenciales y selección de Dockerfile
 ├── init_sqlserver.sql       # Esquema, índices y datos semilla de CoreBancario5B (idempotente)
 ├── postman_collection.json  # Colección con autenticación y pruebas automáticas
+├── COMPILACION.md           # Instrucciones de compilación y prueba (con y sin Docker)
+├── PRUEBAS.md               # Pruebas, métricas y demostraciones de la defensa
 ├── DOCUMENTACION.md         # Reporte técnico
 ├── MANUAL_DE_USUARIO_RED_NEXUS.pdf
 ├── MANUAL_TECNICO_RED_NEXUS_ISO8583.pdf
 ├── docs/manuales/           # Fuentes HTML y capturas de los manuales
+├── simulador/SimuladorIso.java  # Terminal ISO 8583 por TCP (demostración en vivo)
 └── src
     ├── main/java/com/banco/recolector
     │   ├── RecolectorApplication.java      # Arranque y modo --healthcheck

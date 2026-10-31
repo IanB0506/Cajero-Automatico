@@ -7,7 +7,7 @@
 #   docker compose --profile comparacion up -d --build app-jvm -> misma app sobre la JVM (comparar con el nativo)
 #
 # Imagen de la app (variable APP_DOCKERFILE del archivo .env):
-#   Dockerfile      -> binario nativo GraalVM 25 sobre Distroless (por defecto)
+#   Dockerfile      -> binario nativo GraalVM 25 sobre Distroless
 #   Dockerfile.jvm  -> JAR sobre Temurin 25 con ZGC (compilación más rápida)
 #
 # Contraseñas, credenciales, puertos y zona horaria se configuran en el archivo .env
